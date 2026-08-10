@@ -29,12 +29,6 @@ import {
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 
-const fmtDataCurta = (iso: string | null) =>
-  iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('pt-BR') : '-'
-
-const fmtMoeda = (v: number) =>
-  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
-
 export default function SeparacaoParcialPage() {
   const { user, signOut } = useAuth()
   const [vendasDisponiveis, setVendasDisponiveis] = useState<VendaDisponivel[]>([])
@@ -345,32 +339,29 @@ export default function SeparacaoParcialPage() {
                     Nenhum boleto encontrado para esta venda.
                   </p>
                 ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Parcela</TableHead>
-                        <TableHead>Vencimento</TableHead>
-                        <TableHead className="text-right">Valor</TableHead>
-                        <TableHead>Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
+                  <>
+                    {/* SPEC-072: Separação Parcial não é tela financeira —
+                        usuário pediu explicitamente pra tirar valor e
+                        vencimento, só número do boleto e quantas parcelas
+                        ainda faltam finalizar. */}
+                    <p className="text-sm text-muted-foreground mb-3">
+                      {boletos.filter((b) => !b.finalizado).length} de {boletos.length} parcela(s)
+                      pendente(s)
+                    </p>
+                    <ul className="space-y-1.5">
                       {boletos.map((b) => (
-                        <TableRow key={b.id}>
-                          <TableCell className="text-sm">
-                            {b.numParcela}/{b.totalParcelas}
-                          </TableCell>
-                          <TableCell className="text-sm">{fmtDataCurta(b.vencimento)}</TableCell>
-                          <TableCell className="text-right text-sm font-medium">
-                            {fmtMoeda(b.valor)}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{b.status}</Badge>
-                          </TableCell>
-                        </TableRow>
+                        <li
+                          key={b.id}
+                          className="flex items-center justify-between text-sm py-1.5 px-2 rounded-md bg-muted/40"
+                        >
+                          <span className="font-mono">{b.nossoNumero}</span>
+                          <Badge variant={b.finalizado ? 'outline' : 'secondary'}>
+                            {b.finalizado ? 'Finalizado' : `Parcela ${b.numParcela}/${b.totalParcelas}`}
+                          </Badge>
+                        </li>
                       ))}
-                    </TableBody>
-                  </Table>
+                    </ul>
+                  </>
                 )}
               </div>
             </div>

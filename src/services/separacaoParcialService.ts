@@ -101,22 +101,23 @@ export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
 
 export interface BoletoResumo {
   id: string
+  nossoNumero: string
   numParcela: number
   totalParcelas: number
-  valor: number
-  vencimento: string | null
   status: string
-  tipoOperacao: string
+  finalizado: boolean
 }
 
 // SPEC-072: usuário pediu para conectar a tela com os boletos gerados na
-// aprovação do orçamento — dá contexto de pagamento sem expor nada além do
-// que já é visível pra quem tem acesso a este sistema (RLS de boletos
-// estendida para liberar SELECT também via slug 'separacao-parcial').
+// aprovação do orçamento, mas depois foi explícito: nada de valor aparece
+// aqui, só o número do boleto e quantas parcelas ainda faltam finalizar —
+// "Separação Parcial" não é uma tela financeira. Por isso a query nem busca
+// mais "valor"/"vencimento" (não precisa existir no payload pra não vazar
+// por engano depois).
 export async function buscarBoletosPorOrcamento(orcamentoId: string): Promise<BoletoResumo[]> {
   const { data, error } = await supabase
     .from('boletos')
-    .select('id, num_parcela, total_parcelas, valor, vencimento, status, tipo_operacao')
+    .select('id, nosso_numero, num_parcela, total_parcelas, status')
     .eq('orcamento_id', orcamentoId)
     .order('num_parcela', { ascending: true })
 
@@ -124,12 +125,11 @@ export async function buscarBoletosPorOrcamento(orcamentoId: string): Promise<Bo
 
   return (data || []).map((b: any) => ({
     id: b.id,
+    nossoNumero: b.nosso_numero,
     numParcela: b.num_parcela,
     totalParcelas: b.total_parcelas,
-    valor: Number(b.valor) || 0,
-    vencimento: b.vencimento,
     status: b.status,
-    tipoOperacao: b.tipo_operacao,
+    finalizado: b.status === 'Pago',
   }))
 }
 
