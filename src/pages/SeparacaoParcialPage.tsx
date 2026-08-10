@@ -185,7 +185,7 @@ export default function SeparacaoParcialPage() {
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
           <Button variant="ghost" size="icon" asChild title="Voltar para a Central Lucenera">
-            <a href="https://central-lucenera.goskip.app/">
+            <a href="https://central-lucenera-dashboard-1c9ba.goskip.app/dashboard">
               <Building2 className="w-4 h-4" />
             </a>
           </Button>
