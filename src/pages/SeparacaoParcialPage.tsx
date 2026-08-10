@@ -1,5 +1,14 @@
 import { useState, useMemo, useEffect } from 'react'
-import { Loader2, Scissors, LogOut, History, Receipt, ArrowLeft, Search } from 'lucide-react'
+import {
+  Loader2,
+  Scissors,
+  LogOut,
+  History,
+  Receipt,
+  ArrowLeft,
+  Search,
+  Building2,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -175,6 +184,11 @@ export default function SeparacaoParcialPage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
+          <Button variant="ghost" size="icon" asChild title="Voltar para a Central Lucenera">
+            <a href="https://central-lucenera.goskip.app/">
+              <Building2 className="w-4 h-4" />
+            </a>
+          </Button>
           <Button variant="ghost" size="icon" onClick={() => signOut()} title="Sair">
             <LogOut className="w-4 h-4" />
           </Button>
