@@ -61,20 +61,23 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
 
   // referencia mora em produtos, não em projeto_itens (só l_fixo/classificação
   // mora lá) — vw_estoque_saldos_projeto_item não expõe nenhum dos dois.
-  const [{ data: piRows, error: piError }, { data: produtoRows, error: produtoError }, { data: clienteRow, error: clienteError }] =
-    await Promise.all([
-      supabase.from('projeto_itens').select('id, l_fixo').in('id', projetoItemIds),
-      produtoIds.length > 0
-        ? supabase.from('produtos').select('id, referencia').in('id', produtoIds)
-        : Promise.resolve({ data: [], error: null }),
-      saldoRows[0].cliente_id
-        ? supabase
-            .from('contatos')
-            .select('id, nome, razao_social')
-            .eq('id', saldoRows[0].cliente_id)
-            .maybeSingle()
-        : Promise.resolve({ data: null, error: null }),
-    ])
+  const [
+    { data: piRows, error: piError },
+    { data: produtoRows, error: produtoError },
+    { data: clienteRow, error: clienteError },
+  ] = await Promise.all([
+    supabase.from('projeto_itens').select('id, l_fixo').in('id', projetoItemIds),
+    produtoIds.length > 0
+      ? supabase.from('produtos').select('id, referencia').in('id', produtoIds)
+      : Promise.resolve({ data: [], error: null }),
+    saldoRows[0].cliente_id
+      ? supabase
+          .from('contatos')
+          .select('id, nome, razao_social')
+          .eq('id', saldoRows[0].cliente_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ])
 
   if (piError) throw piError
   if (produtoError) throw produtoError
@@ -131,7 +134,12 @@ export async function criarSeparacaoParcial(params: {
   clienteId: string | null
   clienteNome: string | null
   projetoCodigo: string | null
-  itens: { projetoItemId: string; produtoId: string | null; descricao: string | null; quantidade: number }[]
+  itens: {
+    projetoItemId: string
+    produtoId: string | null
+    descricao: string | null
+    quantidade: number
+  }[]
   observacoes?: string
 }): Promise<{ separacaoId: string }> {
   const itensValidos = params.itens.filter((i) => i.quantidade > 0)

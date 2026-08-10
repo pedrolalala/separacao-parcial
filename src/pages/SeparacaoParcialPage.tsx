@@ -135,9 +135,7 @@ export default function SeparacaoParcialPage() {
       <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 max-w-[1400px] w-full mx-auto">
         <div className="bg-card border rounded-xl p-4 flex flex-wrap items-end gap-3">
           <div className="flex-1 min-w-[200px]">
-            <label className="text-xs font-semibold uppercase text-muted-foreground">
-              Venda
-            </label>
+            <label className="text-xs font-semibold uppercase text-muted-foreground">Venda</label>
             <div className="relative mt-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
@@ -200,7 +198,10 @@ export default function SeparacaoParcialPage() {
                           {item.codigo ?? '-'}
                         </TableCell>
                         <TableCell className="text-sm">{item.referencia || '-'}</TableCell>
-                        <TableCell className="text-sm max-w-[240px] truncate" title={item.descricao || ''}>
+                        <TableCell
+                          className="text-sm max-w-[240px] truncate"
+                          title={item.descricao || ''}
+                        >
                           {item.descricao || '-'}
                         </TableCell>
                         <TableCell className="text-sm">{item.classificacao || '-'}</TableCell>
@@ -208,7 +209,9 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm font-semibold">
                           {item.q_venda}
                         </TableCell>
-                        <TableCell className="text-right text-sm">{item.q_entrega_futura}</TableCell>
+                        <TableCell className="text-right text-sm">
+                          {item.q_entrega_futura}
+                        </TableCell>
                         <TableCell className="text-right text-sm">
                           {item.q_transferida_saida}
                         </TableCell>
