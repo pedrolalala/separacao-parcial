@@ -215,24 +215,35 @@ export default function SeparacaoParcialPage() {
                   : 'Nenhuma venda encontrada com esse filtro.'}
               </p>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {vendasFiltradas.map((v) => (
-                  <button
-                    key={v.orcamentoNumero}
-                    type="button"
-                    onClick={() => handleLocalizar(v.orcamentoNumero)}
-                    disabled={loading}
-                    className="text-left border rounded-lg p-3 hover:border-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
-                  >
-                    <div className="font-semibold text-sm text-primary">{v.orcamentoNumero}</div>
-                    <div className="text-sm text-foreground truncate" title={v.clienteNome || ''}>
-                      {v.clienteNome || 'Cliente não identificado'}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Projeto: {v.projetoCodigo || '-'}
-                    </div>
-                  </button>
-                ))}
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Venda</TableHead>
+                      <TableHead>Cliente</TableHead>
+                      <TableHead>Projeto</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {vendasFiltradas.map((v) => (
+                      <TableRow
+                        key={v.orcamentoNumero}
+                        onClick={() => !loading && handleLocalizar(v.orcamentoNumero)}
+                        className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''}`}
+                      >
+                        <TableCell className="font-semibold text-primary text-sm">
+                          {v.orcamentoNumero}
+                        </TableCell>
+                        <TableCell className="text-sm">
+                          {v.clienteNome || 'Cliente não identificado'}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {v.projetoCodigo || '-'}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             )}
           </div>
