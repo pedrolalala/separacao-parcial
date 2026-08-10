@@ -1,7 +1,6 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Loader2,
-  PackageSearch,
   Scissors,
   LogOut,
   History,
