@@ -1,8 +1,16 @@
-import { useState, useEffect } from 'react'
-import { Loader2, PackageSearch, Scissors, LogOut, History, Receipt } from 'lucide-react'
+import { useState, useMemo, useEffect } from 'react'
+import {
+  Loader2,
+  PackageSearch,
+  Scissors,
+  LogOut,
+  History,
+  Receipt,
+  ArrowLeft,
+  Search,
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { SearchableSelect } from '@/components/ui/searchable-select'
 import {
   Table,
   TableHeader,
@@ -26,6 +34,9 @@ import {
   type BoletoResumo,
 } from '@/services/separacaoParcialService'
 
+const LOGO_URL =
+  'https://vcvcwzmbiftcawncibke.supabase.co/storage/v1/object/public/Logo/lucenera-vertical.png'
+
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 
@@ -33,6 +44,7 @@ export default function SeparacaoParcialPage() {
   const { user, signOut } = useAuth()
   const [vendasDisponiveis, setVendasDisponiveis] = useState<VendaDisponivel[]>([])
   const [carregandoVendas, setCarregandoVendas] = useState(true)
+  const [filtro, setFiltro] = useState('')
   const [numeroVenda, setNumeroVenda] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -45,8 +57,8 @@ export default function SeparacaoParcialPage() {
 
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
-  // operacional (aprovadas e com projeto_itens) pra virar um seletor de
-  // busca de verdade.
+  // operacional (aprovadas e com projeto_itens) pra virar uma lista visível
+  // (usuário reportou que o seletor escondido atrás de um clique atrapalhava).
   useEffect(() => {
     listarVendasDisponiveis()
       .then(setVendasDisponiveis)
@@ -54,12 +66,19 @@ export default function SeparacaoParcialPage() {
       .finally(() => setCarregandoVendas(false))
   }, [])
 
-  const handleLocalizar = async (numero?: string) => {
-    const alvo = (numero ?? numeroVenda).trim()
-    if (!alvo) {
-      toast.error('Selecione a venda.')
-      return
-    }
+  const vendasFiltradas = useMemo(() => {
+    const termo = filtro.trim().toLowerCase()
+    if (!termo) return vendasDisponiveis
+    return vendasDisponiveis.filter(
+      (v) =>
+        v.orcamentoNumero.toLowerCase().includes(termo) ||
+        (v.clienteNome || '').toLowerCase().includes(termo) ||
+        (v.projetoCodigo || '').toLowerCase().includes(termo),
+    )
+  }, [vendasDisponiveis, filtro])
+
+  const handleLocalizar = async (numero: string) => {
+    setNumeroVenda(numero)
     setLoading(true)
     setVenda(null)
     setParciais([])
@@ -67,8 +86,8 @@ export default function SeparacaoParcialPage() {
     setQuantidades({})
     try {
       const [vendaInfo, historico] = await Promise.all([
-        buscarVendaPorNumero(alvo),
-        listarParciaisPorVenda(alvo),
+        buscarVendaPorNumero(numero),
+        listarParciaisPorVenda(numero),
       ])
       if (!vendaInfo) {
         toast.error('Nenhuma venda encontrada com esse número.', {
@@ -88,6 +107,16 @@ export default function SeparacaoParcialPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // SPEC-072: usuário reportou que não tinha como voltar da tela de detalhe
+  // pra lista de busca — reseta tudo e volta pro estado inicial.
+  const handleVoltar = () => {
+    setVenda(null)
+    setNumeroVenda('')
+    setParciais([])
+    setBoletos([])
+    setQuantidades({})
   }
 
   const handleSeparar = async () => {
@@ -146,9 +175,10 @@ export default function SeparacaoParcialPage() {
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">
       <header className="sticky top-0 z-10 bg-card border-b px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2">
-          <PackageSearch className="w-5 h-5 text-primary" />
-          <h1 className="font-bold text-lg">Separação Parcial</h1>
+        <div className="flex items-center gap-3">
+          <img src={LOGO_URL} alt="Lucenera" className="h-8 w-auto object-contain" />
+          <div className="h-6 w-px bg-border hidden sm:block" />
+          <h1 className="font-bold text-lg hidden sm:block">Separação Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
@@ -159,37 +189,65 @@ export default function SeparacaoParcialPage() {
       </header>
 
       <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 max-w-[1400px] w-full mx-auto">
-        <div className="bg-card border rounded-xl p-4 flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-[280px]">
-            <label className="text-xs font-semibold uppercase text-muted-foreground">Venda</label>
-            <div className="mt-1">
-              <SearchableSelect
-                options={vendasDisponiveis.map((v) => ({
-                  value: v.orcamentoNumero,
-                  label: `${v.orcamentoNumero} — ${v.clienteNome || 'Cliente não identificado'}`,
-                  searchTerms: [v.orcamentoNumero, v.clienteNome || '', v.projetoCodigo || ''],
-                }))}
-                value={numeroVenda}
-                onChange={(v) => {
-                  setNumeroVenda(v)
-                  if (v) handleLocalizar(v)
-                }}
-                placeholder={
-                  carregandoVendas ? 'Carregando vendas...' : 'Selecione a venda/orçamento...'
-                }
-                searchPlaceholder="Buscar por número ou cliente..."
-                emptyText={
-                  carregandoVendas
-                    ? 'Carregando...'
-                    : 'Nenhuma venda aprovada com saldo encontrada.'
-                }
+        {!venda ? (
+          <div className="bg-card border rounded-xl p-4">
+            <label className="text-xs font-semibold uppercase text-muted-foreground">
+              Buscar venda
+            </label>
+            <div className="relative mt-1 mb-4">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                value={filtro}
+                onChange={(e) => setFiltro(e.target.value)}
+                placeholder="Filtrar por número da venda ou cliente..."
+                className="pl-9"
                 disabled={carregandoVendas}
               />
             </div>
+
+            {carregandoVendas ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader2 className="w-6 h-6 animate-spin text-primary" />
+              </div>
+            ) : vendasFiltradas.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-10">
+                {vendasDisponiveis.length === 0
+                  ? 'Nenhuma venda aprovada com saldo encontrada.'
+                  : 'Nenhuma venda encontrada com esse filtro.'}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {vendasFiltradas.map((v) => (
+                  <button
+                    key={v.orcamentoNumero}
+                    type="button"
+                    onClick={() => handleLocalizar(v.orcamentoNumero)}
+                    disabled={loading}
+                    className="text-left border rounded-lg p-3 hover:border-primary hover:bg-primary/5 transition-colors disabled:opacity-50"
+                  >
+                    <div className="font-semibold text-sm text-primary">{v.orcamentoNumero}</div>
+                    <div className="text-sm text-foreground truncate" title={v.clienteNome || ''}>
+                      {v.clienteNome || 'Cliente não identificado'}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Projeto: {v.projetoCodigo || '-'}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          {loading && <Loader2 className="w-5 h-5 animate-spin text-primary shrink-0 mb-2" />}
-          {venda && (
+        ) : (
+          <div className="bg-card border rounded-xl p-4 flex flex-wrap items-center gap-4">
+            <Button variant="outline" size="sm" onClick={handleVoltar}>
+              <ArrowLeft className="w-4 h-4 mr-2" />
+              Voltar à busca
+            </Button>
             <div className="flex-1 min-w-[240px] flex flex-wrap gap-x-6 gap-y-1 text-sm">
+              <div>
+                <span className="text-muted-foreground">Venda: </span>
+                <span className="font-medium">{venda.orcamentoNumero}</span>
+              </div>
               <div>
                 <span className="text-muted-foreground">Cliente: </span>
                 <span className="font-medium">{venda.clienteNome || '-'}</span>
@@ -199,8 +257,14 @@ export default function SeparacaoParcialPage() {
                 <span className="font-medium">{venda.projetoCodigo || '-'}</span>
               </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+
+        {loading && (
+          <div className="flex items-center justify-center py-10">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          </div>
+        )}
 
         {venda && (
           <>
@@ -366,15 +430,6 @@ export default function SeparacaoParcialPage() {
               </div>
             </div>
           </>
-        )}
-
-        {!venda && !loading && (
-          <div className="flex-1 flex items-center justify-center text-center text-muted-foreground py-20">
-            <div>
-              <PackageSearch className="w-10 h-10 mx-auto mb-3 opacity-40" />
-              <p>Selecione a venda acima para começar.</p>
-            </div>
-          </div>
         )}
       </main>
     </div>

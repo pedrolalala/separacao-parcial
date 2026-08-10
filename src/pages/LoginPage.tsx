@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Mail, Lock, Eye, EyeOff, Loader2, PackageSearch } from 'lucide-react'
+import { Mail, Lock, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { useAuth } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
+
+const LOGO_URL =
+  'https://vcvcwzmbiftcawncibke.supabase.co/storage/v1/object/public/Logo/lucenera-vertical.png'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -40,11 +43,8 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-background to-muted px-4">
       <div className="w-full max-w-[420px] bg-card rounded-2xl shadow-lg p-8 sm:p-12 border">
         <div className="text-center mb-10">
-          <div className="mx-auto mb-3 w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center">
-            <PackageSearch className="w-8 h-8 text-primary" />
-          </div>
+          <img src={LOGO_URL} alt="Lucenera" className="mx-auto mb-4 h-16 w-auto object-contain" />
           <h1 className="text-xl font-bold">Separação Parcial</h1>
-          <p className="text-muted-foreground text-sm">Lucenera</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
