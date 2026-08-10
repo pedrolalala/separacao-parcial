@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { Search, Loader2, PackageSearch, Scissors, LogOut, History } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Loader2, PackageSearch, Scissors, LogOut, History, Receipt } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import {
   Table,
   TableHeader,
@@ -17,37 +18,65 @@ import {
   buscarVendaPorNumero,
   criarSeparacaoParcial,
   listarParciaisPorVenda,
+  listarVendasDisponiveis,
+  buscarBoletosPorOrcamento,
   type VendaInfo,
   type ParcialHistorico,
+  type VendaDisponivel,
+  type BoletoResumo,
 } from '@/services/separacaoParcialService'
 
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
 
+const fmtDataCurta = (iso: string | null) =>
+  iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('pt-BR') : '-'
+
+const fmtMoeda = (v: number) =>
+  new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v)
+
 export default function SeparacaoParcialPage() {
   const { user, signOut } = useAuth()
+  const [vendasDisponiveis, setVendasDisponiveis] = useState<VendaDisponivel[]>([])
+  const [carregandoVendas, setCarregandoVendas] = useState(true)
   const [numeroVenda, setNumeroVenda] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [venda, setVenda] = useState<VendaInfo | null>(null)
   const [parciais, setParciais] = useState<ParcialHistorico[]>([])
+  const [boletos, setBoletos] = useState<BoletoResumo[]>([])
   // SPEC-072: quantidade digitada na coluna "À Separar", por projeto_item_id
   // — zerada a cada "Separar" bem-sucedido.
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
 
-  const handleLocalizar = async () => {
-    if (!numeroVenda.trim()) {
-      toast.error('Informe o número da venda.')
+  // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
+  // de descobrir quais números existem — carrega as vendas com saldo
+  // operacional (aprovadas e com projeto_itens) pra virar um seletor de
+  // busca de verdade.
+  useEffect(() => {
+    listarVendasDisponiveis()
+      .then(setVendasDisponiveis)
+      .catch((err) =>
+        toast.error('Erro ao carregar lista de vendas', { description: err?.message }),
+      )
+      .finally(() => setCarregandoVendas(false))
+  }, [])
+
+  const handleLocalizar = async (numero?: string) => {
+    const alvo = (numero ?? numeroVenda).trim()
+    if (!alvo) {
+      toast.error('Selecione a venda.')
       return
     }
     setLoading(true)
     setVenda(null)
     setParciais([])
+    setBoletos([])
     setQuantidades({})
     try {
       const [vendaInfo, historico] = await Promise.all([
-        buscarVendaPorNumero(numeroVenda),
-        listarParciaisPorVenda(numeroVenda),
+        buscarVendaPorNumero(alvo),
+        listarParciaisPorVenda(alvo),
       ])
       if (!vendaInfo) {
         toast.error('Nenhuma venda encontrada com esse número.', {
@@ -57,6 +86,11 @@ export default function SeparacaoParcialPage() {
       }
       setVenda(vendaInfo)
       setParciais(historico)
+      if (vendaInfo.orcamentoId) {
+        buscarBoletosPorOrcamento(vendaInfo.orcamentoId)
+          .then(setBoletos)
+          .catch((err) => toast.error('Erro ao buscar boletos', { description: err?.message }))
+      }
     } catch (err: any) {
       toast.error('Erro ao buscar venda', { description: err?.message })
     } finally {
@@ -134,27 +168,34 @@ export default function SeparacaoParcialPage() {
 
       <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 max-w-[1400px] w-full mx-auto">
         <div className="bg-card border rounded-xl p-4 flex flex-wrap items-end gap-3">
-          <div className="flex-1 min-w-[200px]">
+          <div className="flex-1 min-w-[280px]">
             <label className="text-xs font-semibold uppercase text-muted-foreground">Venda</label>
-            <div className="relative mt-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
+            <div className="mt-1">
+              <SearchableSelect
+                options={vendasDisponiveis.map((v) => ({
+                  value: v.orcamentoNumero,
+                  label: `${v.orcamentoNumero} — ${v.clienteNome || 'Cliente não identificado'}`,
+                  searchTerms: [v.orcamentoNumero, v.clienteNome || '', v.projetoCodigo || ''],
+                }))}
                 value={numeroVenda}
-                onChange={(e) => setNumeroVenda(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLocalizar()}
-                placeholder="Número da venda/orçamento"
-                className="pl-9"
+                onChange={(v) => {
+                  setNumeroVenda(v)
+                  if (v) handleLocalizar(v)
+                }}
+                placeholder={
+                  carregandoVendas ? 'Carregando vendas...' : 'Selecione a venda/orçamento...'
+                }
+                searchPlaceholder="Buscar por número ou cliente..."
+                emptyText={
+                  carregandoVendas
+                    ? 'Carregando...'
+                    : 'Nenhuma venda aprovada com saldo encontrada.'
+                }
+                disabled={carregandoVendas}
               />
             </div>
           </div>
-          <Button onClick={handleLocalizar} disabled={loading}>
-            {loading ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Search className="w-4 h-4 mr-2" />
-            )}
-            Localizar
-          </Button>
+          {loading && <Loader2 className="w-5 h-5 animate-spin text-primary shrink-0 mb-2" />}
           {venda && (
             <div className="flex-1 min-w-[240px] flex flex-wrap gap-x-6 gap-y-1 text-sm">
               <div>
@@ -256,43 +297,84 @@ export default function SeparacaoParcialPage() {
               </div>
             </div>
 
-            <div className="bg-card border rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <History className="w-4 h-4 text-muted-foreground" />
-                <h2 className="font-semibold text-sm">Parciais desta venda</h2>
-              </div>
-              {parciais.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-4 text-center">
-                  Nenhuma separação parcial registrada ainda para esta venda.
-                </p>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Parcial</TableHead>
-                      <TableHead>Funcionário</TableHead>
-                      <TableHead>Data</TableHead>
-                      <TableHead>Itens</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {parciais.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="font-mono text-xs">
-                          {p.id.split('-')[0].toUpperCase()}
-                        </TableCell>
-                        <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
-                        <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
-                        <TableCell className="text-sm">{p.itens}</TableCell>
-                        <TableCell>
-                          <Badge variant="outline">{p.status}</Badge>
-                        </TableCell>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="bg-card border rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <History className="w-4 h-4 text-muted-foreground" />
+                  <h2 className="font-semibold text-sm">Parciais desta venda</h2>
+                </div>
+                {parciais.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    Nenhuma separação parcial registrada ainda para esta venda.
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Parcial</TableHead>
+                        <TableHead>Funcionário</TableHead>
+                        <TableHead>Data</TableHead>
+                        <TableHead>Itens</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+                    </TableHeader>
+                    <TableBody>
+                      {parciais.map((p) => (
+                        <TableRow key={p.id}>
+                          <TableCell className="font-mono text-xs">
+                            {p.id.split('-')[0].toUpperCase()}
+                          </TableCell>
+                          <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
+                          <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
+                          <TableCell className="text-sm">{p.itens}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{p.status}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+
+              <div className="bg-card border rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Receipt className="w-4 h-4 text-muted-foreground" />
+                  <h2 className="font-semibold text-sm">Boletos desta venda</h2>
+                </div>
+                {boletos.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    Nenhum boleto encontrado para esta venda.
+                  </p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Parcela</TableHead>
+                        <TableHead>Vencimento</TableHead>
+                        <TableHead className="text-right">Valor</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {boletos.map((b) => (
+                        <TableRow key={b.id}>
+                          <TableCell className="text-sm">
+                            {b.numParcela}/{b.totalParcelas}
+                          </TableCell>
+                          <TableCell className="text-sm">{fmtDataCurta(b.vencimento)}</TableCell>
+                          <TableCell className="text-right text-sm font-medium">
+                            {fmtMoeda(b.valor)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{b.status}</Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
             </div>
           </>
         )}
@@ -301,7 +383,7 @@ export default function SeparacaoParcialPage() {
           <div className="flex-1 flex items-center justify-center text-center text-muted-foreground py-20">
             <div>
               <PackageSearch className="w-10 h-10 mx-auto mb-3 opacity-40" />
-              <p>Informe o número da venda e clique em "Localizar" para começar.</p>
+              <p>Selecione a venda acima para começar.</p>
             </div>
           </div>
         )}
