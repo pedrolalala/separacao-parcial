@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
 import { User, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase/client'
+import { consumeCodeFromUrl } from '@/lib/cross-system-auth'
 
 interface AuthContextType {
   user: User | null
@@ -24,19 +25,40 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let mounted = true
+    let initialized = false
+
+    // Acesso vindo da Central chega com ?sso_code na URL. onAuthStateChange
+    // dispara um evento inicial com a sessão que já existia ANTES da troca
+    // desse código terminar (normalmente nula, numa aba nova) — se esse
+    // evento resolvesse "loading" pra false direto, o app achava que
+    // ninguém tinha logado antes da troca terminar, "bugando" o clique
+    // vindo da Central. Por isso a resolução real só acontece depois do
+    // consumeCodeFromUrl + getSession abaixo.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!mounted || !initialized) return
+      setSession(nextSession)
+      setUser(nextSession?.user ?? null)
     })
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
-    return () => subscription.unsubscribe()
+
+    consumeCodeFromUrl('separacao-parcial')
+      .catch(() => {})
+      .finally(() => {
+        supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+          if (!mounted) return
+          initialized = true
+          setSession(initialSession)
+          setUser(initialSession?.user ?? null)
+          setLoading(false)
+        })
+      })
+
+    return () => {
+      mounted = false
+      subscription.unsubscribe()
+    }
   }, [])
 
   const signIn = async (email: string, password: string) => {
