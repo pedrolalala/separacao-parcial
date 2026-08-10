@@ -22,6 +22,7 @@ export interface ItemVenda {
 }
 
 export interface VendaInfo {
+  orcamentoId: string | null
   orcamentoNumero: string
   clienteId: string | null
   clienteNome: string | null
@@ -37,6 +38,101 @@ export interface ParcialHistorico {
   itens: number
 }
 
+export interface VendaDisponivel {
+  orcamentoId: string
+  orcamentoNumero: string
+  clienteNome: string | null
+  projetoCodigo: string | null
+}
+
+// SPEC-072: a busca original exigia o usuário já saber o número exato da
+// venda, sem nenhuma forma de descobrir quais existem — lista as vendas que
+// de fato têm saldo operacional (aprovadas e com projeto_itens), pra virar
+// um seletor de busca em vez de um campo de texto cego.
+export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
+  const { data, error } = await supabase
+    .from('vw_estoque_saldos_projeto_item')
+    .select('orcamento_id, orcamento_numero, cliente_id, projeto_codigo')
+    .eq('status_operacional', 'ativo')
+
+  if (error) throw error
+  if (!data || data.length === 0) return []
+
+  const porVenda = new Map<
+    string,
+    { orcamento_id: string; cliente_id: string | null; projeto_codigo: string | null }
+  >()
+  data.forEach((r: any) => {
+    if (!porVenda.has(r.orcamento_numero)) {
+      porVenda.set(r.orcamento_numero, {
+        orcamento_id: r.orcamento_id,
+        cliente_id: r.cliente_id,
+        projeto_codigo: r.projeto_codigo,
+      })
+    }
+  })
+
+  const clienteIds = [...new Set([...porVenda.values()].map((v) => v.cliente_id).filter(Boolean))] as string[]
+  const { data: clientes, error: clienteError } =
+    clienteIds.length > 0
+      ? await supabase.from('contatos').select('id, nome, razao_social').in('id', clienteIds)
+      : { data: [] as any[], error: null }
+  if (clienteError) throw clienteError
+
+  const clienteMap = new Map((clientes || []).map((c: any) => [c.id, c]))
+
+  return Array.from(porVenda.entries())
+    .map(([numero, v]) => {
+      const cliente = v.cliente_id ? clienteMap.get(v.cliente_id) : null
+      const clienteNome = cliente
+        ? cliente.razao_social?.trim() && cliente.razao_social !== cliente.nome
+          ? `${cliente.razao_social} - ${cliente.nome}`
+          : cliente.nome
+        : null
+      return {
+        orcamentoId: v.orcamento_id,
+        orcamentoNumero: numero,
+        clienteNome,
+        projetoCodigo: v.projeto_codigo,
+      }
+    })
+    .sort((a, b) => a.orcamentoNumero.localeCompare(b.orcamentoNumero))
+}
+
+export interface BoletoResumo {
+  id: string
+  numParcela: number
+  totalParcelas: number
+  valor: number
+  vencimento: string | null
+  status: string
+  tipoOperacao: string
+}
+
+// SPEC-072: usuário pediu para conectar a tela com os boletos gerados na
+// aprovação do orçamento — dá contexto de pagamento sem expor nada além do
+// que já é visível pra quem tem acesso a este sistema (RLS de boletos
+// estendida para liberar SELECT também via slug 'separacao-parcial').
+export async function buscarBoletosPorOrcamento(orcamentoId: string): Promise<BoletoResumo[]> {
+  const { data, error } = await supabase
+    .from('boletos')
+    .select('id, num_parcela, total_parcelas, valor, vencimento, status, tipo_operacao')
+    .eq('orcamento_id', orcamentoId)
+    .order('num_parcela', { ascending: true })
+
+  if (error) throw error
+
+  return (data || []).map((b: any) => ({
+    id: b.id,
+    numParcela: b.num_parcela,
+    totalParcelas: b.total_parcelas,
+    valor: Number(b.valor) || 0,
+    vencimento: b.vencimento,
+    status: b.status,
+    tipoOperacao: b.tipo_operacao,
+  }))
+}
+
 // SPEC-072: busca cruza só a venda informada (orcamento_numero) — diferente
 // da busca de venda de origem da SPEC-071 (devolução), que cruza todos os
 // projetos do cliente. Aqui o usuário já sabe o número da venda (replica a
@@ -48,7 +144,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
   const { data: saldoRows, error: saldoError } = await supabase
     .from('vw_estoque_saldos_projeto_item')
     .select(
-      'projeto_item_id, produto_id, cliente_id, produto, produto_codigo, projeto_codigo, orcamento_numero, q_venda, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue, q_devolvida, q_transferida_saida, status_operacional',
+      'orcamento_id, projeto_item_id, produto_id, cliente_id, produto, produto_codigo, projeto_codigo, orcamento_numero, q_venda, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue, q_devolvida, q_transferida_saida, status_operacional',
     )
     .eq('orcamento_numero', numero)
     .eq('status_operacional', 'ativo')
@@ -112,6 +208,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     : null
 
   return {
+    orcamentoId: saldoRows[0].orcamento_id,
     orcamentoNumero: numero,
     clienteId: saldoRows[0].cliente_id,
     clienteNome,
