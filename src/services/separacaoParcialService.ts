@@ -338,9 +338,15 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
   const numero = numeroVenda.trim()
   if (!numero) return []
 
+  // SPEC-090 adicionou alterado_por (também FK pra usuarios) em `separacoes`
+  // — com 2 FKs pra usuarios, o embed implícito "usuarios(nome)" fica
+  // ambíguo pro PostgREST; precisa apontar explicitamente pra
+  // responsavel_id.
   const { data, error } = await supabase
     .from('separacoes')
-    .select('id, created_at, status, responsavel:usuarios(nome), itens:separacao_itens(id)')
+    .select(
+      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id)',
+    )
     .eq('numero_venda', numero)
     .order('created_at', { ascending: false })
 
