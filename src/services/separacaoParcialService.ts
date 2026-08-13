@@ -319,6 +319,21 @@ export async function finalizarSeparacaoPronta(
   if (error) throw error
 }
 
+// SPEC-090: estorno de uma separação já registrada — observação
+// obrigatória (validada também no servidor), devolve o saldo pra reserva
+// e avisa o logístico anotando nas observações da entrega vinculada, se
+// existir (sem sistema de notificação novo — decisão do usuário).
+export async function estornarSeparacaoParcial(
+  separacaoId: string,
+  observacao: string,
+): Promise<void> {
+  const { error } = await (supabase as any).rpc('estornar_separacao_parcial', {
+    p_separacao_id: separacaoId,
+    p_observacao: observacao,
+  })
+  if (error) throw error
+}
+
 export async function listarParciaisPorVenda(numeroVenda: string): Promise<ParcialHistorico[]> {
   const numero = numeroVenda.trim()
   if (!numero) return []

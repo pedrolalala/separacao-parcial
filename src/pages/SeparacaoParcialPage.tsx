@@ -11,6 +11,14 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import {
   Table,
   TableHeader,
@@ -25,6 +33,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   buscarVendaPorNumero,
   criarSeparacaoParcial,
+  estornarSeparacaoParcial,
   finalizarSeparacaoPronta,
   listarParciaisPorVenda,
   listarVendasDisponiveis,
@@ -40,6 +49,72 @@ const LOGO_URL =
 
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+
+// SPEC-091 + SPEC-093: gera e já abre o diálogo de impressão (o usuário
+// escolhe "Salvar como PDF" ou imprimir direto) assim que uma separação é
+// confirmada — sem precisar de biblioteca de PDF nova nem Edge Function,
+// reaproveita a impressão nativa do navegador. Mesmo documento serve pra
+// imprimir a lista de separação (não existia nenhum layout de impressão
+// antes desta SPEC).
+function imprimirListaSeparacao(params: {
+  venda: VendaInfo
+  itensSeparados: {
+    descricao: string
+    codigo: number | null
+    referencia: string | null
+    quantidade: number
+  }[]
+  responsavelNome: string
+}) {
+  const janela = window.open('', '_blank', 'width=800,height=900')
+  if (!janela) return
+
+  const linhas = params.itensSeparados
+    .map(
+      (i) => `
+        <tr>
+          <td>${i.codigo ?? '-'}</td>
+          <td>${i.referencia || '-'}</td>
+          <td>${i.descricao || '-'}</td>
+          <td style="text-align:right">${i.quantidade}</td>
+        </tr>`,
+    )
+    .join('')
+
+  janela.document.write(`
+    <html>
+      <head>
+        <title>Separação ${params.venda.orcamentoNumero}</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
+          h1 { font-size: 18px; margin-bottom: 4px; }
+          .meta { font-size: 13px; color: #555; margin-bottom: 16px; }
+          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+          th { background: #f3f3f3; }
+        </style>
+      </head>
+      <body>
+        <h1>Lista de Separação — Venda ${params.venda.orcamentoNumero}</h1>
+        <div class="meta">
+          Cliente: ${params.venda.clienteNome || '-'}<br />
+          Projeto: ${params.venda.projetoCodigo || '-'}<br />
+          Separado por: ${params.responsavelNome}<br />
+          Data: ${new Date().toLocaleString('pt-BR')}
+        </div>
+        <table>
+          <thead>
+            <tr><th>Código</th><th>Referência</th><th>Descrição</th><th>Qtd.</th></tr>
+          </thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </body>
+    </html>
+  `)
+  janela.document.close()
+  janela.focus()
+  janela.print()
+}
 
 export default function SeparacaoParcialPage() {
   const { user, signOut } = useAuth()
@@ -59,6 +134,10 @@ export default function SeparacaoParcialPage() {
   // inteira sem saldo em reserva (nada mais a separar), disparando a
   // integração automática com Logística.
   const [dataEntrega, setDataEntrega] = useState('')
+  // SPEC-090: estorno de uma separação já registrada.
+  const [estornoAlvo, setEstornoAlvo] = useState<ParcialHistorico | null>(null)
+  const [estornoObservacao, setEstornoObservacao] = useState('')
+  const [estornando, setEstornando] = useState(false)
 
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
@@ -83,6 +162,19 @@ export default function SeparacaoParcialPage() {
         (v.projetoCodigo || '').toLowerCase().includes(termo),
     )
   }, [vendasDisponiveis, filtro])
+
+  // SPEC-092: unifica o código exibido da "parcial" com o código da venda
+  // (antes era um fragmento de UUID sem relação nenhuma com o número da
+  // venda) — numeração sequencial por ordem de criação, estável mesmo com
+  // a lista exibida em ordem decrescente.
+  const numerosParciais = useMemo(() => {
+    const porDataAsc = [...parciais].sort(
+      (a, b) => new Date(a.criadoEm).getTime() - new Date(b.criadoEm).getTime(),
+    )
+    const mapa = new Map<string, number>()
+    porDataAsc.forEach((p, idx) => mapa.set(p.id, idx + 1))
+    return mapa
+  }, [parciais])
 
   const handleLocalizar = async (numero: string) => {
     setNumeroVenda(numero)
@@ -166,6 +258,23 @@ export default function SeparacaoParcialPage() {
         itens,
       })
       toast.success('Separação parcial registrada com sucesso.')
+
+      // SPEC-091: gera e abre a impressão da lista assim que a separação é
+      // confirmada — sem precisar de um clique extra.
+      imprimirListaSeparacao({
+        venda,
+        itensSeparados: itens.map((i) => {
+          const original = venda.itens.find((v) => v.projeto_item_id === i.projetoItemId)
+          return {
+            descricao: i.descricao,
+            codigo: original?.codigo ?? null,
+            referencia: original?.referencia ?? null,
+            quantidade: i.quantidade,
+          }
+        }),
+        responsavelNome: user?.email || 'Não identificado',
+      })
+
       const [vendaAtualizada, historico] = await Promise.all([
         buscarVendaPorNumero(venda.orcamentoNumero),
         listarParciaisPorVenda(venda.orcamentoNumero),
@@ -196,6 +305,34 @@ export default function SeparacaoParcialPage() {
       toast.error('Erro ao registrar separação', { description: err?.message })
     } finally {
       setSaving(false)
+    }
+  }
+
+  // SPEC-090: estorna a separação inteira selecionada — devolve o saldo
+  // pra reserva, exige motivo, e avisa a entrega vinculada (se já existir)
+  // pelas observações dela.
+  const handleConfirmarEstorno = async () => {
+    if (!estornoAlvo || !venda) return
+    if (!estornoObservacao.trim()) {
+      toast.error('Informe o motivo do estorno.')
+      return
+    }
+    setEstornando(true)
+    try {
+      await estornarSeparacaoParcial(estornoAlvo.id, estornoObservacao.trim())
+      toast.success('Separação estornada. O saldo voltou para a reserva.')
+      const [vendaAtualizada, historico] = await Promise.all([
+        buscarVendaPorNumero(venda.orcamentoNumero),
+        listarParciaisPorVenda(venda.orcamentoNumero),
+      ])
+      setVenda(vendaAtualizada)
+      setParciais(historico)
+      setEstornoAlvo(null)
+      setEstornoObservacao('')
+    } catch (err: any) {
+      toast.error('Erro ao estornar separação', { description: err?.message })
+    } finally {
+      setEstornando(false)
     }
   }
 
@@ -426,19 +563,34 @@ export default function SeparacaoParcialPage() {
                         <TableHead>Data</TableHead>
                         <TableHead>Itens</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {parciais.map((p) => (
                         <TableRow key={p.id}>
                           <TableCell className="font-mono text-xs">
-                            {p.id.split('-')[0].toUpperCase()}
+                            {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
                           </TableCell>
                           <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
                           <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
                           <TableCell className="text-sm">{p.itens}</TableCell>
                           <TableCell>
-                            <Badge variant="outline">{p.status}</Badge>
+                            <Badge variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}>
+                              {p.status}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {p.status !== 'Cancelado' && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-destructive hover:text-destructive"
+                                onClick={() => setEstornoAlvo(p)}
+                              >
+                                Estornar
+                              </Button>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -488,6 +640,42 @@ export default function SeparacaoParcialPage() {
           </>
         )}
       </main>
+
+      <Dialog open={!!estornoAlvo} onOpenChange={(open) => !open && setEstornoAlvo(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Estornar separação</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            O saldo desses itens volta para a Reserva. Se separou a quantidade errada, estorne e
+            separe novamente com a quantidade certa.
+          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase text-muted-foreground">
+              Motivo do estorno *
+            </label>
+            <Textarea
+              value={estornoObservacao}
+              onChange={(e) => setEstornoObservacao(e.target.value)}
+              placeholder="Ex.: separei 3, era pra ser 2"
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEstornoAlvo(null)} disabled={estornando}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmarEstorno}
+              disabled={estornando || !estornoObservacao.trim()}
+            >
+              {estornando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Confirmar estorno
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
