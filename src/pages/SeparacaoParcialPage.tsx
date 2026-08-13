@@ -25,6 +25,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import {
   buscarVendaPorNumero,
   criarSeparacaoParcial,
+  finalizarSeparacaoPronta,
   listarParciaisPorVenda,
   listarVendasDisponiveis,
   buscarBoletosPorOrcamento,
@@ -54,6 +55,10 @@ export default function SeparacaoParcialPage() {
   // SPEC-072: quantidade digitada na coluna "À Separar", por projeto_item_id
   // — zerada a cada "Separar" bem-sucedido.
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
+  // SPEC-089: opcional — só usada se essa ação de "Separar" deixar a venda
+  // inteira sem saldo em reserva (nada mais a separar), disparando a
+  // integração automática com Logística.
+  const [dataEntrega, setDataEntrega] = useState('')
 
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
@@ -119,6 +124,7 @@ export default function SeparacaoParcialPage() {
     setParciais([])
     setBoletos([])
     setQuantidades({})
+    setDataEntrega('')
   }
 
   const handleSeparar = async () => {
@@ -152,7 +158,7 @@ export default function SeparacaoParcialPage() {
 
     setSaving(true)
     try {
-      await criarSeparacaoParcial({
+      const { separacaoId } = await criarSeparacaoParcial({
         numeroVenda: venda.orcamentoNumero,
         clienteId: venda.clienteId,
         clienteNome: venda.clienteNome,
@@ -164,9 +170,28 @@ export default function SeparacaoParcialPage() {
         buscarVendaPorNumero(venda.orcamentoNumero),
         listarParciaisPorVenda(venda.orcamentoNumero),
       ])
+
+      // SPEC-089: se essa ação deixou a venda inteira sem saldo em reserva
+      // (nada mais a separar) e a pessoa informou data de entrega, finaliza
+      // a separação como 'Pronto' — dispara automaticamente a criação da
+      // entrega em Logística, sem precisar reentrar isso lá.
+      const vendaCompleta =
+        vendaAtualizada != null && vendaAtualizada.itens.every((i) => i.q_reserva <= 0)
+      if (vendaCompleta && dataEntrega) {
+        try {
+          await finalizarSeparacaoPronta(separacaoId, dataEntrega)
+          toast.success('Venda totalmente separada — entrega criada automaticamente na Logística.')
+        } catch (err: any) {
+          toast.error('Separação salva, mas não foi possível criar a entrega automática.', {
+            description: err?.message,
+          })
+        }
+      }
+
       setVenda(vendaAtualizada)
       setParciais(historico)
       setQuantidades({})
+      setDataEntrega('')
     } catch (err: any) {
       toast.error('Erro ao registrar separação', { description: err?.message })
     } finally {
@@ -359,7 +384,18 @@ export default function SeparacaoParcialPage() {
                   </TableBody>
                 </Table>
               </div>
-              <div className="p-4 border-t flex justify-end">
+              <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold uppercase text-muted-foreground">
+                    Data de entrega (se esta ação completar a venda)
+                  </label>
+                  <Input
+                    type="date"
+                    value={dataEntrega}
+                    onChange={(e) => setDataEntrega(e.target.value)}
+                    className="h-9 w-44"
+                  />
+                </div>
                 <Button onClick={handleSeparar} disabled={saving}>
                   {saving ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />

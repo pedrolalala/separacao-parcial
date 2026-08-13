@@ -302,6 +302,23 @@ export async function criarSeparacaoParcial(params: {
   return { separacaoId }
 }
 
+// SPEC-089: quando a última separação de uma venda deixa tudo sem saldo em
+// reserva (nada mais a separar), marca a separação como 'Pronto' com a
+// data de entrega informada — reaproveita o trigger trg_separacao_pronta
+// já existente no banco (cria automaticamente a linha em `entregas`, sem
+// o Matheus ter que reentrar isso na Logística). A RPC reconfere no
+// servidor que a venda está mesmo completa antes de mudar o status.
+export async function finalizarSeparacaoPronta(
+  separacaoId: string,
+  dataEntrega: string,
+): Promise<void> {
+  const { error } = await (supabase as any).rpc('finalizar_separacao_parcial_pronta', {
+    p_separacao_id: separacaoId,
+    p_data_entrega: dataEntrega,
+  })
+  if (error) throw error
+}
+
 export async function listarParciaisPorVenda(numeroVenda: string): Promise<ParcialHistorico[]> {
   const numero = numeroVenda.trim()
   if (!numero) return []
