@@ -46,6 +46,8 @@ import {
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
+  listarItensDaParcial,
+  estornarItemSeparacao,
   type VendaInfo,
   type ParcialHistorico,
   type VendaDisponivel,
@@ -53,6 +55,7 @@ import {
   type ItemVenda,
   type ReservaOutroProjeto,
   type LogTroca,
+  type ItemParcial,
 } from '@/services/separacaoParcialService'
 
 const LOGO_URL =
@@ -164,9 +167,14 @@ export default function SeparacaoParcialPage() {
   const [dataEntregaFinal, setDataEntregaFinal] = useState('')
   const [finalizando, setFinalizando] = useState(false)
   // SPEC-090: estorno de uma separação já registrada.
+  // SPEC-099: granular — lista os itens da separação (com quanto já foi
+  // estornado) pra escolher peça + quantidade, mantendo "Reverter tudo".
   const [estornoAlvo, setEstornoAlvo] = useState<ParcialHistorico | null>(null)
   const [estornoObservacao, setEstornoObservacao] = useState('')
   const [estornando, setEstornando] = useState(false)
+  const [estornoItens, setEstornoItens] = useState<ItemParcial[]>([])
+  const [carregandoEstornoItens, setCarregandoEstornoItens] = useState(false)
+  const [estornoQuantidades, setEstornoQuantidades] = useState<Record<string, string>>({})
 
   // SPEC-098: troca de peça em Reserva entre projetos (Projetista/gerente/
   // admin) — a permissão é decidida inteiramente no banco
@@ -411,10 +419,81 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-099: abre o modal de estorno já carregando os itens da separação
+  // (peça, quantidade, quanto já foi estornado) — antes o botão só revertia
+  // a separação inteira, sem opção de escolher peça/quantidade.
+  const handleAbrirEstorno = async (parcial: ParcialHistorico) => {
+    setEstornoAlvo(parcial)
+    setEstornoObservacao('')
+    setEstornoQuantidades({})
+    setCarregandoEstornoItens(true)
+    try {
+      const itens = await listarItensDaParcial(parcial.id)
+      setEstornoItens(itens)
+    } catch (err: any) {
+      toast.error('Erro ao carregar itens da separação', { description: err?.message })
+    } finally {
+      setCarregandoEstornoItens(false)
+    }
+  }
+
+  const handleFecharEstorno = () => {
+    setEstornoAlvo(null)
+    setEstornoObservacao('')
+    setEstornoItens([])
+    setEstornoQuantidades({})
+  }
+
+  // SPEC-099: estorna só as peças/quantidades preenchidas nos campos —
+  // resolve o caso relatado (separação com 2 peças, usuário queria desfazer
+  // só 1 das 2, e só parte da quantidade de uma delas).
+  const handleEstornarItens = async () => {
+    if (!venda) return
+    if (!estornoObservacao.trim()) {
+      toast.error('Informe o motivo do estorno.')
+      return
+    }
+    const itensParaEstornar = estornoItens
+      .map((item) => ({ item, quantidade: Number(estornoQuantidades[item.id]) || 0 }))
+      .filter(({ quantidade }) => quantidade > 0)
+
+    if (itensParaEstornar.length === 0) {
+      toast.error('Informe a quantidade a estornar em ao menos uma peça.')
+      return
+    }
+    const excedente = itensParaEstornar.find(
+      ({ item, quantidade }) => quantidade > item.quantidade - item.quantidadeEstornada,
+    )
+    if (excedente) {
+      toast.error('Quantidade maior que o restante ainda não estornado dessa peça.')
+      return
+    }
+
+    setEstornando(true)
+    try {
+      for (const { item, quantidade } of itensParaEstornar) {
+        await estornarItemSeparacao(item.id, quantidade, estornoObservacao.trim())
+      }
+      toast.success('Peça(s) estornada(s). O saldo voltou para a reserva.')
+      const [vendaAtualizada, historico] = await Promise.all([
+        buscarVendaPorNumero(venda.orcamentoNumero),
+        listarParciaisPorVenda(venda.orcamentoNumero),
+      ])
+      setVenda(vendaAtualizada)
+      setParciais(historico)
+      handleFecharEstorno()
+    } catch (err: any) {
+      toast.error('Erro ao estornar item', { description: err?.message })
+    } finally {
+      setEstornando(false)
+    }
+  }
+
   // SPEC-090: estorna a separação inteira selecionada — devolve o saldo
   // pra reserva, exige motivo, e avisa a entrega vinculada (se já existir)
-  // pelas observações dela.
-  const handleConfirmarEstorno = async () => {
+  // pelas observações dela. SPEC-099: continua existindo como atalho
+  // "Reverter tudo" dentro do mesmo modal granular.
+  const handleReverterTudo = async () => {
     if (!estornoAlvo || !venda) return
     if (!estornoObservacao.trim()) {
       toast.error('Informe o motivo do estorno.')
@@ -430,8 +509,7 @@ export default function SeparacaoParcialPage() {
       ])
       setVenda(vendaAtualizada)
       setParciais(historico)
-      setEstornoAlvo(null)
-      setEstornoObservacao('')
+      handleFecharEstorno()
     } catch (err: any) {
       toast.error('Erro ao estornar separação', { description: err?.message })
     } finally {
@@ -837,7 +915,7 @@ export default function SeparacaoParcialPage() {
                                 variant="ghost"
                                 size="sm"
                                 className="text-destructive hover:text-destructive"
-                                onClick={() => setEstornoAlvo(p)}
+                                onClick={() => handleAbrirEstorno(p)}
                               >
                                 Estornar
                               </Button>
@@ -892,15 +970,62 @@ export default function SeparacaoParcialPage() {
         )}
       </main>
 
-      <Dialog open={!!estornoAlvo} onOpenChange={(open) => !open && setEstornoAlvo(null)}>
-        <DialogContent>
+      {/* SPEC-099: estorno granular — escolhe peça + quantidade, ou reverte
+          a separação inteira de uma vez ("Reverter tudo"). */}
+      <Dialog open={!!estornoAlvo} onOpenChange={(open) => !open && handleFecharEstorno()}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Estornar separação</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            O saldo desses itens volta para a Reserva. Se separou a quantidade errada, estorne e
-            separe novamente com a quantidade certa.
+            Escolha a peça e a quantidade a devolver para a Reserva, ou reverta a separação
+            inteira de uma vez.
           </p>
+          {carregandoEstornoItens ? (
+            <div className="flex items-center justify-center py-6">
+              <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Peça</TableHead>
+                    <TableHead className="text-right">Restante</TableHead>
+                    <TableHead className="text-right w-28">Estornar</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {estornoItens.map((item) => {
+                    const restante = item.quantidade - item.quantidadeEstornada
+                    return (
+                      <TableRow key={item.id}>
+                        <TableCell className="text-sm max-w-[200px] truncate" title={item.descricao}>
+                          {item.descricao}
+                        </TableCell>
+                        <TableCell className="text-right text-sm">{restante}</TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={restante}
+                            step="1"
+                            value={estornoQuantidades[item.id] ?? ''}
+                            onChange={(e) =>
+                              setEstornoQuantidades((q) => ({ ...q, [item.id]: e.target.value }))
+                            }
+                            disabled={restante <= 0}
+                            className="w-20 h-8 text-right text-sm ml-auto"
+                            placeholder="0"
+                          />
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
           <div className="space-y-1">
             <label className="text-xs font-semibold uppercase text-muted-foreground">
               Motivo do estorno *
@@ -912,17 +1037,25 @@ export default function SeparacaoParcialPage() {
               rows={3}
             />
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEstornoAlvo(null)} disabled={estornando}>
+          <DialogFooter className="flex-wrap gap-2">
+            <Button variant="outline" onClick={handleFecharEstorno} disabled={estornando}>
               Cancelar
             </Button>
             <Button
-              variant="destructive"
-              onClick={handleConfirmarEstorno}
+              variant="secondary"
+              onClick={handleReverterTudo}
               disabled={estornando || !estornoObservacao.trim()}
             >
               {estornando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-              Confirmar estorno
+              Reverter tudo
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleEstornarItens}
+              disabled={estornando || !estornoObservacao.trim()}
+            >
+              {estornando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Estornar peça(s) selecionada(s)
             </Button>
           </DialogFooter>
         </DialogContent>

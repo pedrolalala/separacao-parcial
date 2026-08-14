@@ -323,12 +323,54 @@ export async function finalizarSeparacaoPronta(
 // obrigatória (validada também no servidor), devolve o saldo pra reserva
 // e avisa o logístico anotando nas observações da entrega vinculada, se
 // existir (sem sistema de notificação novo — decisão do usuário).
+// SPEC-099: continua existindo como "reverter tudo" — a RPC agora orquestra
+// estornar_item_separacao internamente, item por item.
 export async function estornarSeparacaoParcial(
   separacaoId: string,
   observacao: string,
 ): Promise<void> {
   const { error } = await (supabase as any).rpc('estornar_separacao_parcial', {
     p_separacao_id: separacaoId,
+    p_observacao: observacao,
+  })
+  if (error) throw error
+}
+
+// SPEC-099: estorno granular — usuário reportou que reverter uma separação
+// com 2 peças (ex.: 1009 e 11461) devolvia as duas juntas mesmo querendo
+// desfazer só uma. Lista os itens de uma separação com quanto já foi
+// estornado, pra escolher peça + quantidade específica.
+export interface ItemParcial {
+  id: string
+  descricao: string
+  quantidade: number
+  quantidadeEstornada: number
+}
+
+export async function listarItensDaParcial(separacaoId: string): Promise<ItemParcial[]> {
+  const { data, error } = await supabase
+    .from('separacao_itens')
+    .select('id, descricao, quantidade, quantidade_estornada')
+    .eq('separacao_id', separacaoId)
+
+  if (error) throw error
+
+  return (data || []).map((r: any) => ({
+    id: r.id,
+    descricao: r.descricao,
+    quantidade: Number(r.quantidade) || 0,
+    quantidadeEstornada: Number(r.quantidade_estornada) || 0,
+  }))
+}
+
+export async function estornarItemSeparacao(
+  separacaoItemId: string,
+  quantidade: number,
+  observacao: string,
+): Promise<void> {
+  const { error } = await (supabase as any).rpc('estornar_item_separacao', {
+    p_separacao_item_id: separacaoItemId,
+    p_quantidade: quantidade,
     p_observacao: observacao,
   })
   if (error) throw error
