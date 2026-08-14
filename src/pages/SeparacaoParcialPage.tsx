@@ -8,6 +8,7 @@ import {
   ArrowLeft,
   Search,
   Building2,
+  Truck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -134,6 +135,15 @@ export default function SeparacaoParcialPage() {
   // inteira sem saldo em reserva (nada mais a separar), disparando a
   // integração automática com Logística.
   const [dataEntrega, setDataEntrega] = useState('')
+  // Achado no teste de ponta a ponta 13-14/08: se a venda ficar sem
+  // reserva SEM que dataEntrega tenha sido preenchida na mesma ação (ou a
+  // finalização automática falhar por qualquer motivo), a separação fica
+  // travada em "Pendente" para sempre — o campo "À Separar" fica
+  // desabilitado (reserva zerada) e não há nenhum outro jeito de chamar
+  // finalizar_separacao_parcial_pronta depois. Único jeito de sair era
+  // Estornar tudo. Este estado cobre o resgate manual.
+  const [dataEntregaFinal, setDataEntregaFinal] = useState('')
+  const [finalizando, setFinalizando] = useState(false)
   // SPEC-090: estorno de uma separação já registrada.
   const [estornoAlvo, setEstornoAlvo] = useState<ParcialHistorico | null>(null)
   const [estornoObservacao, setEstornoObservacao] = useState('')
@@ -176,6 +186,17 @@ export default function SeparacaoParcialPage() {
     return mapa
   }, [parciais])
 
+  // Achado no teste de ponta a ponta 13-14/08: venda sem nenhum saldo em
+  // reserva mas com parcial(is) ainda "Pendente" — precisa de um jeito de
+  // finalizar a entrega manualmente, já que "Separar" fica inutilizável
+  // (nenhum item tem reserva > 0 pra digitar quantidade).
+  const parciaisPendentes = useMemo(
+    () => parciais.filter((p) => p.status === 'Pendente'),
+    [parciais],
+  )
+  const vendaSemReserva = venda != null && venda.itens.every((i) => i.q_reserva <= 0)
+  const precisaFinalizarManualmente = vendaSemReserva && parciaisPendentes.length > 0
+
   const handleLocalizar = async (numero: string) => {
     setNumeroVenda(numero)
     setLoading(true)
@@ -217,6 +238,7 @@ export default function SeparacaoParcialPage() {
     setBoletos([])
     setQuantidades({})
     setDataEntrega('')
+    setDataEntregaFinal('')
   }
 
   const handleSeparar = async () => {
@@ -305,6 +327,36 @@ export default function SeparacaoParcialPage() {
       toast.error('Erro ao registrar separação', { description: err?.message })
     } finally {
       setSaving(false)
+    }
+  }
+
+  // Achado no teste de ponta a ponta 13-14/08: resgate manual para quando a
+  // venda já está sem reserva (nada mais a separar) mas ainda há parcial(is)
+  // "Pendente" sem entrega criada — finaliza cada uma delas com a mesma
+  // data de entrega informada aqui.
+  const handleFinalizarEntrega = async () => {
+    if (!venda || parciaisPendentes.length === 0) return
+    if (!dataEntregaFinal) {
+      toast.error('Informe a data de entrega.')
+      return
+    }
+    setFinalizando(true)
+    try {
+      for (const parcial of parciaisPendentes) {
+        await finalizarSeparacaoPronta(parcial.id, dataEntregaFinal)
+      }
+      toast.success('Entrega finalizada — criada automaticamente na Logística.')
+      const [vendaAtualizada, historico] = await Promise.all([
+        buscarVendaPorNumero(venda.orcamentoNumero),
+        listarParciaisPorVenda(venda.orcamentoNumero),
+      ])
+      setVenda(vendaAtualizada)
+      setParciais(historico)
+      setDataEntregaFinal('')
+    } catch (err: any) {
+      toast.error('Erro ao finalizar entrega', { description: err?.message })
+    } finally {
+      setFinalizando(false)
     }
   }
 
@@ -543,6 +595,42 @@ export default function SeparacaoParcialPage() {
                 </Button>
               </div>
             </div>
+
+            {precisaFinalizarManualmente && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="font-semibold text-sm text-amber-900">
+                    Venda sem saldo em reserva — falta finalizar a entrega
+                  </h2>
+                  <p className="text-sm text-amber-800">
+                    Todos os itens já foram separados, mas ainda há {parciaisPendentes.length}{' '}
+                    separação(ões) pendente(s) sem data de entrega. Informe a data para criar a
+                    entrega na Logística.
+                  </p>
+                </div>
+                <div className="flex items-end gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-semibold uppercase text-muted-foreground">
+                      Data de entrega
+                    </label>
+                    <Input
+                      type="date"
+                      value={dataEntregaFinal}
+                      onChange={(e) => setDataEntregaFinal(e.target.value)}
+                      className="h-9 w-44"
+                    />
+                  </div>
+                  <Button onClick={handleFinalizarEntrega} disabled={finalizando}>
+                    {finalizando ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Truck className="w-4 h-4 mr-2" />
+                    )}
+                    Finalizar Entrega
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="bg-card border rounded-xl p-4">
