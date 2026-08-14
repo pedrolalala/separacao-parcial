@@ -360,3 +360,157 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
     itens: row.itens?.length || 0,
   }))
 }
+
+// SPEC-098: troca de peça em Reserva entre dois projetos (mesmo produto),
+// liberada para Projetista/gerente/admin — orquestra o mecanismo já
+// existente da SPEC-011 (transferencias_estoque). A regra de quem pode é
+// decidida inteiramente no banco (pode_trocar_reserva/
+// trocar_reserva_projetista); o frontend só reflete o resultado, não
+// duplica a lógica.
+export async function podeTrocarReserva(): Promise<boolean> {
+  const { data, error } = await (supabase as any).rpc('pode_trocar_reserva')
+  if (error) throw error
+  return !!data
+}
+
+// SPEC-098: mesma informação do card de peça do Cadastro Lucenera (SPEC-049)
+// — "Reservado por Cliente/Projeto" — lendo a mesma view já em produção
+// (vw_cadastro_produto_reserva_detalhe), filtrada por produto e excluindo o
+// próprio item de origem. Serve tanto de painel informativo quanto de lista
+// de destino no modal de troca.
+export interface ReservaOutroProjeto {
+  projetoItemId: string
+  projetoCodigo: string | null
+  orcamentoNumero: string | null
+  clienteNome: string | null
+  equipeNome: string | null
+  qVenda: number
+  qReserva: number
+  qEntregaFutura: number
+}
+
+export async function getReservasOutrosProjetos(
+  produtoId: string,
+  excluirProjetoItemId: string,
+): Promise<ReservaOutroProjeto[]> {
+  const { data, error } = await (supabase.from as any)('vw_cadastro_produto_reserva_detalhe')
+    .select('*')
+    .eq('produto_id', produtoId)
+    .neq('projeto_item_id', excluirProjetoItemId)
+
+  if (error) throw error
+
+  return (data || []).map((r: any) => ({
+    projetoItemId: r.projeto_item_id,
+    projetoCodigo: r.projeto_codigo,
+    orcamentoNumero: r.orcamento_numero,
+    clienteNome: r.cliente_nome,
+    equipeNome: r.equipe_nome,
+    qVenda: Number(r.q_venda) || 0,
+    qReserva: Number(r.q_reserva) || 0,
+    qEntregaFutura: Number(r.q_entrega_futura) || 0,
+  }))
+}
+
+export async function trocarReserva(params: {
+  origemProjetoItemId: string
+  destinoProjetoItemId: string
+  quantidade: number
+  motivo?: string
+}): Promise<void> {
+  const { error } = await (supabase as any).rpc('trocar_reserva_projetista', {
+    p_origem_projeto_item_id: params.origemProjetoItemId,
+    p_destino_projeto_item_id: params.destinoProjetoItemId,
+    p_quantidade: params.quantidade,
+    p_motivo: params.motivo || null,
+  })
+  if (error) throw error
+}
+
+export interface LogTroca {
+  id: string
+  quantidade: number
+  motivo: string | null
+  solicitadoEm: string
+  solicitanteNome: string | null
+  aprovadorNome: string | null
+  produtoCodigo: number | string | null
+  produtoDescricao: string | null
+  origemProjetoCodigo: string | null
+  origemClienteNome: string | null
+  destinoProjetoCodigo: string | null
+  destinoClienteNome: string | null
+}
+
+// SPEC-098: "Log de Trocas" — transferencias_estoque já tem tudo (quem
+// solicitou/aprovou, quantidade, motivo, data); só falta um jeito fácil de
+// ver isso na tela, sem precisar abrir o banco. solicitado_por/aprovado_por
+// apontam pra auth.users (não pra public.usuarios diretamente), por isso a
+// busca de nome é uma query separada, mesmo padrão já usado neste arquivo
+// para nomes de cliente.
+export async function listarLogTrocas(): Promise<LogTroca[]> {
+  const { data: transf, error } = await supabase
+    .from('transferencias_estoque')
+    .select(
+      'id, origem_projeto_item_id, destino_projeto_item_id, quantidade, motivo, solicitado_em, solicitado_por, aprovado_por',
+    )
+    .eq('status', 'aprovada')
+    .order('solicitado_em', { ascending: false })
+
+  if (error) throw error
+  if (!transf || transf.length === 0) return []
+
+  const projetoItemIds = [
+    ...new Set(transf.flatMap((t: any) => [t.origem_projeto_item_id, t.destino_projeto_item_id])),
+  ]
+  const usuarioIds = [
+    ...new Set(transf.flatMap((t: any) => [t.solicitado_por, t.aprovado_por]).filter(Boolean)),
+  ] as string[]
+
+  const [{ data: itensRows, error: itensError }, { data: usuarioRows, error: usuarioError }] =
+    await Promise.all([
+      supabase
+        .from('vw_estoque_saldos_projeto_item')
+        .select('projeto_item_id, produto, produto_codigo, projeto_codigo, cliente_id')
+        .in('projeto_item_id', projetoItemIds),
+      usuarioIds.length > 0
+        ? supabase.from('usuarios').select('id, nome').in('id', usuarioIds)
+        : Promise.resolve({ data: [] as any[], error: null }),
+    ])
+  if (itensError) throw itensError
+  if (usuarioError) throw usuarioError
+
+  const clienteIds = [
+    ...new Set((itensRows || []).map((r: any) => r.cliente_id).filter(Boolean)),
+  ] as string[]
+  const { data: clienteRows, error: clienteError } =
+    clienteIds.length > 0
+      ? await supabase.from('contatos').select('id, nome').in('id', clienteIds)
+      : { data: [] as any[], error: null }
+  if (clienteError) throw clienteError
+
+  const clienteMap = new Map((clienteRows || []).map((c: any) => [c.id, c.nome]))
+  const itemMap = new Map((itensRows || []).map((r: any) => [r.projeto_item_id, r]))
+  const usuarioMap = new Map((usuarioRows || []).map((u: any) => [u.id, u.nome]))
+
+  return transf.map((t: any) => {
+    const origem = itemMap.get(t.origem_projeto_item_id)
+    const destino = itemMap.get(t.destino_projeto_item_id)
+    return {
+      id: t.id,
+      quantidade: Number(t.quantidade) || 0,
+      motivo: t.motivo,
+      solicitadoEm: t.solicitado_em,
+      solicitanteNome: t.solicitado_por ? (usuarioMap.get(t.solicitado_por) ?? null) : null,
+      aprovadorNome: t.aprovado_por ? (usuarioMap.get(t.aprovado_por) ?? null) : null,
+      produtoCodigo: origem?.produto_codigo ?? destino?.produto_codigo ?? null,
+      produtoDescricao: origem?.produto ?? destino?.produto ?? null,
+      origemProjetoCodigo: origem?.projeto_codigo ?? null,
+      origemClienteNome: origem?.cliente_id ? (clienteMap.get(origem.cliente_id) ?? null) : null,
+      destinoProjetoCodigo: destino?.projeto_codigo ?? null,
+      destinoClienteNome: destino?.cliente_id
+        ? (clienteMap.get(destino.cliente_id) ?? null)
+        : null,
+    }
+  })
+}

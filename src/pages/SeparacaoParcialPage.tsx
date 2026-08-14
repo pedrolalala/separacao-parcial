@@ -9,6 +9,9 @@ import {
   Search,
   Building2,
   Truck,
+  ArrowLeftRight,
+  ScrollText,
+  Users,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -39,10 +42,17 @@ import {
   listarParciaisPorVenda,
   listarVendasDisponiveis,
   buscarBoletosPorOrcamento,
+  podeTrocarReserva,
+  getReservasOutrosProjetos,
+  trocarReserva,
+  listarLogTrocas,
   type VendaInfo,
   type ParcialHistorico,
   type VendaDisponivel,
   type BoletoResumo,
+  type ItemVenda,
+  type ReservaOutroProjeto,
+  type LogTroca,
 } from '@/services/separacaoParcialService'
 
 const LOGO_URL =
@@ -50,6 +60,15 @@ const LOGO_URL =
 
 const fmtData = (iso: string) =>
   new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+
+const fmtDataHora = (iso: string) =>
+  new Date(iso).toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 
 // SPEC-091 + SPEC-093: gera e já abre o diálogo de impressão (o usuário
 // escolhe "Salvar como PDF" ou imprimir direto) assim que uma separação é
@@ -149,10 +168,25 @@ export default function SeparacaoParcialPage() {
   const [estornoObservacao, setEstornoObservacao] = useState('')
   const [estornando, setEstornando] = useState(false)
 
+  // SPEC-098: troca de peça em Reserva entre projetos (Projetista/gerente/
+  // admin) — a permissão é decidida inteiramente no banco
+  // (pode_trocar_reserva), carregada uma vez no login.
+  const [podeTrocar, setPodeTrocar] = useState(false)
+  const [trocaAlvo, setTrocaAlvo] = useState<ItemVenda | null>(null)
+  const [reservasOutras, setReservasOutras] = useState<ReservaOutroProjeto[]>([])
+  const [carregandoReservas, setCarregandoReservas] = useState(false)
+  const [trocaDestino, setTrocaDestino] = useState<ReservaOutroProjeto | null>(null)
+  const [trocaQuantidade, setTrocaQuantidade] = useState('')
+  const [trocaMotivo, setTrocaMotivo] = useState('')
+  const [trocando, setTrocando] = useState(false)
+  const [logAberto, setLogAberto] = useState(false)
+  const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
+  const [carregandoLog, setCarregandoLog] = useState(false)
+
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
-  // operacional (aprovadas e com projeto_itens) pra virar uma lista visível
-  // (usuário reportou que o seletor escondido atrás de um clique atrapalhava).
+  // operacional (aprovadas e com projeto_itens) pra virar um seletor de
+  // busca em vez de um campo de texto cego.
   useEffect(() => {
     listarVendasDisponiveis()
       .then(setVendasDisponiveis)
@@ -160,6 +194,12 @@ export default function SeparacaoParcialPage() {
         toast.error('Erro ao carregar lista de vendas', { description: err?.message }),
       )
       .finally(() => setCarregandoVendas(false))
+  }, [])
+
+  useEffect(() => {
+    podeTrocarReserva()
+      .then(setPodeTrocar)
+      .catch(() => setPodeTrocar(false))
   }, [])
 
   const vendasFiltradas = useMemo(() => {
@@ -399,6 +439,85 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-098: abre o modal de troca pra um item específico e carrega, na
+  // hora, quem mais tem essa mesma peça reservada (painel "Reservado por
+  // Cliente/Projeto", mesma fonte de dado do card de peça do Cadastro
+  // Lucenera) — essa lista também serve de seletor de destino.
+  const handleAbrirTroca = async (item: ItemVenda) => {
+    setTrocaAlvo(item)
+    setTrocaDestino(null)
+    setTrocaQuantidade('')
+    setTrocaMotivo('')
+    if (!item.produto_id) {
+      setReservasOutras([])
+      return
+    }
+    setCarregandoReservas(true)
+    try {
+      const rows = await getReservasOutrosProjetos(item.produto_id, item.projeto_item_id)
+      setReservasOutras(rows)
+    } catch (err: any) {
+      toast.error('Erro ao buscar outras reservas desta peça', { description: err?.message })
+    } finally {
+      setCarregandoReservas(false)
+    }
+  }
+
+  const handleFecharTroca = () => {
+    setTrocaAlvo(null)
+    setTrocaDestino(null)
+    setTrocaQuantidade('')
+    setTrocaMotivo('')
+    setReservasOutras([])
+  }
+
+  const handleConfirmarTroca = async () => {
+    if (!trocaAlvo || !trocaDestino || !venda) return
+    const quantidade = Number(trocaQuantidade)
+    if (!quantidade || quantidade <= 0) {
+      toast.error('Informe uma quantidade válida.')
+      return
+    }
+    if (quantidade > trocaAlvo.q_reserva) {
+      toast.error('Quantidade maior que a reserva disponível para troca.')
+      return
+    }
+    setTrocando(true)
+    try {
+      await trocarReserva({
+        origemProjetoItemId: trocaAlvo.projeto_item_id,
+        destinoProjetoItemId: trocaDestino.projetoItemId,
+        quantidade,
+        motivo: trocaMotivo.trim() || undefined,
+      })
+      toast.success(
+        `${quantidade} unidade(s) trocada(s) para ${trocaDestino.projetoCodigo || trocaDestino.orcamentoNumero || 'o outro projeto'}.`,
+      )
+      const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero)
+      setVenda(vendaAtualizada)
+      handleFecharTroca()
+    } catch (err: any) {
+      toast.error('Erro ao trocar reserva', { description: err?.message })
+    } finally {
+      setTrocando(false)
+    }
+  }
+
+  // SPEC-098: "Log de Trocas" — histórico completo de trocas já aprovadas,
+  // não só desta venda, pra ficar fácil de auditar quem fez o quê.
+  const handleAbrirLog = async () => {
+    setLogAberto(true)
+    setCarregandoLog(true)
+    try {
+      const rows = await listarLogTrocas()
+      setLogTrocas(rows)
+    } catch (err: any) {
+      toast.error('Erro ao carregar log de trocas', { description: err?.message })
+    } finally {
+      setCarregandoLog(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">
       <header className="sticky top-0 z-10 bg-card border-b px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
@@ -408,6 +527,12 @@ export default function SeparacaoParcialPage() {
           <h1 className="font-bold text-lg hidden sm:block">Separação Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
+          {podeTrocar && (
+            <Button variant="outline" size="sm" onClick={handleAbrirLog}>
+              <ScrollText className="w-4 h-4 mr-2" />
+              Log de Trocas
+            </Button>
+          )}
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
           <Button variant="ghost" size="icon" asChild title="Voltar para a Central Lucenera">
             <a href="https://central-lucenera-dashboard-1c9ba.goskip.app/dashboard">
@@ -529,6 +654,7 @@ export default function SeparacaoParcialPage() {
                       <TableHead className="text-right">Ag. Separar</TableHead>
                       <TableHead className="text-right">Separado</TableHead>
                       <TableHead className="text-right">Entregue</TableHead>
+                      {podeTrocar && <TableHead />}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -590,6 +716,21 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm">{item.q_ag_separar}</TableCell>
                         <TableCell className="text-right text-sm">{item.q_separado}</TableCell>
                         <TableCell className="text-right text-sm">{item.q_entregue}</TableCell>
+                        {podeTrocar && (
+                          <TableCell>
+                            {item.q_reserva > 0 && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Trocar peça reservada com outro projeto"
+                                onClick={() => handleAbrirTroca(item)}
+                              >
+                                <ArrowLeftRight className="w-4 h-4 mr-1" />
+                                Trocar
+                              </Button>
+                            )}
+                          </TableCell>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -784,6 +925,204 @@ export default function SeparacaoParcialPage() {
               Confirmar estorno
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-098: modal de troca — a lista "Reservado por Cliente/Projeto"
+          (mesma informação do card de peça do Cadastro Lucenera) funciona
+          como seletor de destino: escolhe a linha, informa quantidade e
+          motivo, confirma. */}
+      <Dialog open={!!trocaAlvo} onOpenChange={(open) => !open && handleFecharTroca()}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Trocar peça reservada</DialogTitle>
+          </DialogHeader>
+          {trocaAlvo && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {trocaAlvo.codigo ?? '-'} — {trocaAlvo.descricao || 'Item sem descrição'}
+                </span>
+                <br />
+                Reserva disponível para troca:{' '}
+                <span className="font-semibold text-emerald-700">{trocaAlvo.q_reserva}</span>
+              </p>
+
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Users className="w-4 h-4 text-muted-foreground" />
+                  <h3 className="text-sm font-semibold">Reservado por Cliente/Projeto</h3>
+                </div>
+                {carregandoReservas ? (
+                  <div className="flex items-center justify-center py-6">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  </div>
+                ) : reservasOutras.length === 0 ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg">
+                    Nenhum outro projeto tem essa peça reservada no momento.
+                  </p>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Projeto</TableHead>
+                          <TableHead>Cliente</TableHead>
+                          <TableHead>Equipe</TableHead>
+                          <TableHead className="text-right">Reservado</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {reservasOutras.map((r) => (
+                          <TableRow
+                            key={r.projetoItemId}
+                            onClick={() => setTrocaDestino(r)}
+                            className={`cursor-pointer hover:bg-primary/5 ${
+                              trocaDestino?.projetoItemId === r.projetoItemId
+                                ? 'bg-primary/10'
+                                : ''
+                            }`}
+                          >
+                            <TableCell className="text-sm font-medium">
+                              {r.projetoCodigo || r.orcamentoNumero || '-'}
+                            </TableCell>
+                            <TableCell className="text-sm">{r.clienteNome || '-'}</TableCell>
+                            <TableCell className="text-sm">{r.equipeNome || '-'}</TableCell>
+                            <TableCell className="text-right text-sm font-semibold">
+                              {r.qReserva}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </div>
+
+              {trocaDestino && (
+                <div className="space-y-3 border-t pt-4">
+                  <p className="text-sm">
+                    Destino selecionado:{' '}
+                    <span className="font-semibold">
+                      {trocaDestino.projetoCodigo || trocaDestino.orcamentoNumero} —{' '}
+                      {trocaDestino.clienteNome || 'Cliente não identificado'}
+                    </span>
+                  </p>
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-semibold uppercase text-muted-foreground">
+                        Quantidade *
+                      </label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={trocaAlvo.q_reserva}
+                        value={trocaQuantidade}
+                        onChange={(e) => setTrocaQuantidade(e.target.value)}
+                        className="w-28 h-9"
+                        placeholder="0"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 flex-1 min-w-[220px]">
+                      <label className="text-xs font-semibold uppercase text-muted-foreground">
+                        Motivo (opcional)
+                      </label>
+                      <Input
+                        value={trocaMotivo}
+                        onChange={(e) => setTrocaMotivo(e.target.value)}
+                        placeholder="Ex.: projeto mais urgente precisa da peça"
+                        className="h-9"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={handleFecharTroca} disabled={trocando}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleConfirmarTroca}
+              disabled={trocando || !trocaDestino || !trocaQuantidade}
+            >
+              {trocando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Confirmar troca
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-098: log de trocas já aprovadas — fácil de consultar sem
+          precisar abrir o banco. */}
+      <Dialog open={logAberto} onOpenChange={setLogAberto}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Log de Trocas</DialogTitle>
+          </DialogHeader>
+          {carregandoLog ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : logTrocas.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">
+              Nenhuma troca registrada ainda.
+            </p>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto border rounded-lg">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Peça</TableHead>
+                    <TableHead>De</TableHead>
+                    <TableHead>Para</TableHead>
+                    <TableHead className="text-right">Qtd.</TableHead>
+                    <TableHead>Feito por</TableHead>
+                    <TableHead>Motivo</TableHead>
+                    <TableHead>Data</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {logTrocas.map((t) => (
+                    <TableRow key={t.id}>
+                      <TableCell className="text-sm">
+                        <span className="font-mono text-primary">{t.produtoCodigo ?? '-'}</span>
+                        <br />
+                        <span className="text-xs text-muted-foreground">
+                          {t.produtoDescricao || '-'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {t.origemProjetoCodigo || '-'}
+                        <br />
+                        <span className="text-xs text-muted-foreground">
+                          {t.origemClienteNome || '-'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {t.destinoProjetoCodigo || '-'}
+                        <br />
+                        <span className="text-xs text-muted-foreground">
+                          {t.destinoClienteNome || '-'}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right text-sm font-semibold">
+                        {t.quantidade}
+                      </TableCell>
+                      <TableCell className="text-sm">{t.solicitanteNome || '-'}</TableCell>
+                      <TableCell className="text-sm max-w-[180px] truncate" title={t.motivo || ''}>
+                        {t.motivo || '-'}
+                      </TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">
+                        {fmtDataHora(t.solicitadoEm)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
