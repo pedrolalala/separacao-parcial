@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import {
   Loader2,
   Scissors,
@@ -196,6 +196,17 @@ export default function SeparacaoParcialPage() {
   )
   const vendaSemReserva = venda != null && venda.itens.every((i) => i.q_reserva <= 0)
   const precisaFinalizarManualmente = vendaSemReserva && parciaisPendentes.length > 0
+
+  // Achado 14/08: usuário reportou "não consigo adicionar quantidade" e "não
+  // tem como reverter" — na prática o campo "À Separar" fica corretamente
+  // desabilitado quando Reserva = 0 (só dá pra separar do que está
+  // reservado), mas isso ficava mudo: nenhuma explicação de que a
+  // quantidade já foi pra uma parcial "Ag. Separar" nem link pro Estornar,
+  // que existe mas fica numa seção separada, fácil de não notar.
+  const parciaisSectionRef = useRef<HTMLDivElement>(null)
+  const scrollToParciais = () => {
+    parciaisSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   const handleLocalizar = async (numero: string) => {
     setNumeroVenda(numero)
@@ -548,22 +559,33 @@ export default function SeparacaoParcialPage() {
                           {item.q_reserva}
                         </TableCell>
                         <TableCell className="bg-primary/5">
-                          <Input
-                            type="number"
-                            min={0}
-                            max={item.q_reserva}
-                            step="1"
-                            value={quantidades[item.projeto_item_id] ?? ''}
-                            onChange={(e) =>
-                              setQuantidades((q) => ({
-                                ...q,
-                                [item.projeto_item_id]: e.target.value,
-                              }))
-                            }
-                            disabled={item.q_reserva <= 0}
-                            className="w-20 h-8 text-right text-sm"
-                            placeholder="0"
-                          />
+                          {item.q_reserva <= 0 && item.q_ag_separar > 0 ? (
+                            <button
+                              type="button"
+                              onClick={scrollToParciais}
+                              className="text-xs text-amber-700 underline decoration-dotted underline-offset-2 hover:text-amber-900 text-left leading-tight"
+                            >
+                              Sem reserva — {item.q_ag_separar} já enviado(s), ver abaixo p/
+                              estornar
+                            </button>
+                          ) : (
+                            <Input
+                              type="number"
+                              min={0}
+                              max={item.q_reserva}
+                              step="1"
+                              value={quantidades[item.projeto_item_id] ?? ''}
+                              onChange={(e) =>
+                                setQuantidades((q) => ({
+                                  ...q,
+                                  [item.projeto_item_id]: e.target.value,
+                                }))
+                              }
+                              disabled={item.q_reserva <= 0}
+                              className="w-20 h-8 text-right text-sm"
+                              placeholder="0"
+                            />
+                          )}
                         </TableCell>
                         <TableCell className="text-right text-sm">{item.q_ag_separar}</TableCell>
                         <TableCell className="text-right text-sm">{item.q_separado}</TableCell>
@@ -633,7 +655,7 @@ export default function SeparacaoParcialPage() {
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="bg-card border rounded-xl p-4">
+              <div ref={parciaisSectionRef} className="bg-card border rounded-xl p-4 scroll-mt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <History className="w-4 h-4 text-muted-foreground" />
                   <h2 className="font-semibold text-sm">Parciais desta venda</h2>
