@@ -85,6 +85,7 @@ function imprimirListaSeparacao(params: {
     descricao: string
     codigo: number | null
     referencia: string | null
+    classificacao: string | null
     quantidade: number
   }[]
   responsavelNome: string
@@ -92,10 +93,20 @@ function imprimirListaSeparacao(params: {
   const janela = window.open('', '_blank', 'width=800,height=900')
   if (!janela) return
 
+  // SPEC-138 (Prompt 6): localizador "L" (mesmo dado da coluna
+  // "Classificação" em tela, vindo de projeto_itens.l_fixo), coluna de
+  // marcação em branco pra conferência física, totalizador no rodapé e
+  // campo de observações — pra alinhar a lista impressa com o que a
+  // equipe de expedição já pedia pra marcar nas caixas.
+  const totalItens = params.itensSeparados.length
+  const totalPecas = params.itensSeparados.reduce((soma, i) => soma + i.quantidade, 0)
+
   const linhas = params.itensSeparados
     .map(
       (i) => `
         <tr>
+          <td class="marcar">&#9633;</td>
+          <td>${i.classificacao || '-'}</td>
           <td>${i.codigo ?? '-'}</td>
           <td>${i.referencia || '-'}</td>
           <td>${i.descricao || '-'}</td>
@@ -115,11 +126,16 @@ function imprimirListaSeparacao(params: {
           table { width: 100%; border-collapse: collapse; font-size: 13px; }
           th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
           th { background: #f3f3f3; }
+          td.marcar { text-align: center; font-size: 16px; width: 28px; }
+          tfoot td { font-weight: bold; background: #f9f9f9; }
+          .observacoes { margin-top: 20px; font-size: 13px; }
+          .observacoes .linha { border-bottom: 1px solid #999; height: 22px; margin-top: 10px; }
         </style>
       </head>
       <body>
-        <h1>Lista de Separação — Venda ${params.venda.orcamentoNumero}</h1>
+        <h1>Lista de Separação — Orçamento ${params.venda.orcamentoNumero}</h1>
         <div class="meta">
+          Venda: ${params.venda.vendaNumero || '-'}<br />
           Cliente: ${params.venda.clienteNome || '-'}<br />
           Projeto: ${params.venda.projetoCodigo || '-'}<br />
           Separado por: ${params.responsavelNome}<br />
@@ -127,10 +143,19 @@ function imprimirListaSeparacao(params: {
         </div>
         <table>
           <thead>
-            <tr><th>Código</th><th>Referência</th><th>Descrição</th><th>Qtd.</th></tr>
+            <tr><th>Conf.</th><th>Local (L)</th><th>Código</th><th>Referência</th><th>Descrição</th><th>Qtd.</th></tr>
           </thead>
           <tbody>${linhas}</tbody>
+          <tfoot>
+            <tr><td colspan="5">Total de itens: ${totalItens}</td><td style="text-align:right">${totalPecas}</td></tr>
+          </tfoot>
         </table>
+        <div class="observacoes">
+          <strong>Observações (pendências, avarias, substituições):</strong>
+          <div class="linha"></div>
+          <div class="linha"></div>
+          <div class="linha"></div>
+        </div>
       </body>
     </html>
   `)
@@ -216,6 +241,7 @@ export default function SeparacaoParcialPage() {
     return vendasDisponiveis.filter(
       (v) =>
         v.orcamentoNumero.toLowerCase().includes(termo) ||
+        (v.vendaNumero || '').toLowerCase().includes(termo) ||
         (v.clienteNome || '').toLowerCase().includes(termo) ||
         (v.projetoCodigo || '').toLowerCase().includes(termo),
     )
@@ -244,6 +270,12 @@ export default function SeparacaoParcialPage() {
   )
   const vendaSemReserva = venda != null && venda.itens.every((i) => i.q_reserva <= 0)
   const precisaFinalizarManualmente = vendaSemReserva && parciaisPendentes.length > 0
+  // SPEC-138 (Prompt 7): boletos só devem aparecer depois de alguma baixa
+  // física registrada — decisão default (usuário não fechou isso no
+  // documento de origem): libera já na 1ª separação parcial confirmada,
+  // não só na entrega 100% concluída. Cada linha de `parciais` já É um
+  // registro de baixa de separação/entrega parcial.
+  const houveBaixaRegistrada = parciais.some((p) => p.status !== 'Cancelado')
 
   // Achado 14/08: usuário reportou "não consigo adicionar quantidade" e "não
   // tem como reverter" — na prática o campo "À Separar" fica corretamente
@@ -350,6 +382,7 @@ export default function SeparacaoParcialPage() {
             descricao: i.descricao,
             codigo: original?.codigo ?? null,
             referencia: original?.referencia ?? null,
+            classificacao: original?.classificacao ?? null,
             quantidade: i.quantidade,
           }
         }),
@@ -655,6 +688,7 @@ export default function SeparacaoParcialPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead>Orçamento</TableHead>
                       <TableHead>Venda</TableHead>
                       <TableHead>Cliente</TableHead>
                       <TableHead>Projeto</TableHead>
@@ -670,6 +704,7 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="font-semibold text-primary text-sm">
                           {v.orcamentoNumero}
                         </TableCell>
+                        <TableCell className="text-sm">{v.vendaNumero || '—'}</TableCell>
                         <TableCell className="text-sm">
                           {v.clienteNome || 'Cliente não identificado'}
                         </TableCell>
@@ -691,8 +726,14 @@ export default function SeparacaoParcialPage() {
             </Button>
             <div className="flex-1 min-w-[240px] flex flex-wrap gap-x-6 gap-y-1 text-sm">
               <div>
-                <span className="text-muted-foreground">Venda: </span>
+                <span className="text-muted-foreground">Orçamento: </span>
                 <span className="font-medium">{venda.orcamentoNumero}</span>
+              </div>
+              <div>
+                {/* SPEC-136: número da venda é distinto do orçamento de
+                origem — null em orçamentos aprovados antes desta SPEC. */}
+                <span className="text-muted-foreground">Venda: </span>
+                <span className="font-medium">{venda.vendaNumero || '—'}</span>
               </div>
               <div>
                 <span className="text-muted-foreground">Cliente: </span>
@@ -720,9 +761,9 @@ export default function SeparacaoParcialPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead>Código</TableHead>
-                      <TableHead>Referência</TableHead>
+                      <TableHead className="max-w-[140px]">Referência</TableHead>
                       <TableHead>Descrição</TableHead>
-                      <TableHead>Classificação</TableHead>
+                      <TableHead className="max-w-[110px]">Local (L)</TableHead>
                       <TableHead className="text-right">Q. Dev.</TableHead>
                       <TableHead className="text-right">Q. Venda</TableHead>
                       <TableHead className="text-right">E. Futura</TableHead>
@@ -732,7 +773,12 @@ export default function SeparacaoParcialPage() {
                       <TableHead className="text-right">Ag. Separar</TableHead>
                       <TableHead className="text-right">Separado</TableHead>
                       <TableHead className="text-right">Entregue</TableHead>
-                      {podeTrocar && <TableHead />}
+                      {/* SPEC-138 (Prompt 5): coluna de ação fixa à direita
+                          dentro do overflow-x-auto — evita rolar até o fim
+                          pra alcançar o botão "Trocar". */}
+                      {podeTrocar && (
+                        <TableHead className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]" />
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -741,14 +787,24 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="font-mono text-primary text-sm">
                           {item.codigo ?? '-'}
                         </TableCell>
-                        <TableCell className="text-sm">{item.referencia || '-'}</TableCell>
+                        <TableCell
+                          className="text-sm max-w-[140px] truncate"
+                          title={item.referencia || ''}
+                        >
+                          {item.referencia || '-'}
+                        </TableCell>
                         <TableCell
                           className="text-sm max-w-[240px] truncate"
                           title={item.descricao || ''}
                         >
                           {item.descricao || '-'}
                         </TableCell>
-                        <TableCell className="text-sm">{item.classificacao || '-'}</TableCell>
+                        <TableCell
+                          className="text-sm max-w-[110px] truncate"
+                          title={item.classificacao || ''}
+                        >
+                          {item.classificacao || '-'}
+                        </TableCell>
                         <TableCell className="text-right text-sm">{item.q_devolvida}</TableCell>
                         <TableCell className="text-right text-sm font-semibold">
                           {item.q_venda}
@@ -795,7 +851,7 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm">{item.q_separado}</TableCell>
                         <TableCell className="text-right text-sm">{item.q_entregue}</TableCell>
                         {podeTrocar && (
-                          <TableCell>
+                          <TableCell className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
                             {item.q_reserva > 0 && (
                               <Button
                                 variant="ghost"
@@ -933,7 +989,11 @@ export default function SeparacaoParcialPage() {
                   <Receipt className="w-4 h-4 text-muted-foreground" />
                   <h2 className="font-semibold text-sm">Boletos desta venda</h2>
                 </div>
-                {boletos.length === 0 ? (
+                {!houveBaixaRegistrada ? (
+                  <p className="text-sm text-muted-foreground py-4 text-center">
+                    Disponível após a baixa da entrega/parcial.
+                  </p>
+                ) : boletos.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-4 text-center">
                     Nenhum boleto encontrado para esta venda.
                   </p>
