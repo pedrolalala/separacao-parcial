@@ -24,10 +24,25 @@ export interface ItemVenda {
 export interface VendaInfo {
   orcamentoId: string | null
   orcamentoNumero: string
+  // SPEC-136: numero da venda propriamente dito (VENDA-0001), distinto do
+  // numero do orcamento de origem (ORC-0001) — null para orcamentos
+  // aprovados antes desta SPEC (nao foi feito backfill).
+  vendaNumero: string | null
   clienteId: string | null
   clienteNome: string | null
   projetoCodigo: string | null
   itens: ItemVenda[]
+}
+
+// SPEC-143: "Dar Baixa" — ação nova e separada de "Separar" (confirmado com
+// o usuário: quem pediu/registrou a parcial pode ser uma pessoa diferente
+// de quem confirma a entrega/retirada depois). 1 baixa por parcial.
+export interface BaixaParcial {
+  id: string
+  codigo: number
+  funcionarioNome: string | null
+  responsavelRetirou: string
+  dataBaixa: string
 }
 
 export interface ParcialHistorico {
@@ -36,11 +51,13 @@ export interface ParcialHistorico {
   responsavelNome: string | null
   status: string
   itens: number
+  baixa: BaixaParcial | null
 }
 
 export interface VendaDisponivel {
   orcamentoId: string
   orcamentoNumero: string
+  vendaNumero: string | null
   clienteNome: string | null
   projetoCodigo: string | null
 }
@@ -52,7 +69,7 @@ export interface VendaDisponivel {
 export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
   const { data, error } = await supabase
     .from('vw_estoque_saldos_projeto_item')
-    .select('orcamento_id, orcamento_numero, cliente_id, projeto_codigo')
+    .select('orcamento_id, orcamento_numero, venda_numero, cliente_id, projeto_codigo')
     .eq('status_operacional', 'ativo')
 
   if (error) throw error
@@ -60,12 +77,18 @@ export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
 
   const porVenda = new Map<
     string,
-    { orcamento_id: string; cliente_id: string | null; projeto_codigo: string | null }
+    {
+      orcamento_id: string
+      venda_numero: string | null
+      cliente_id: string | null
+      projeto_codigo: string | null
+    }
   >()
   data.forEach((r: any) => {
     if (!porVenda.has(r.orcamento_numero)) {
       porVenda.set(r.orcamento_numero, {
         orcamento_id: r.orcamento_id,
+        venda_numero: r.venda_numero,
         cliente_id: r.cliente_id,
         projeto_codigo: r.projeto_codigo,
       })
@@ -94,6 +117,7 @@ export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
       return {
         orcamentoId: v.orcamento_id,
         orcamentoNumero: numero,
+        vendaNumero: v.venda_numero,
         clienteNome,
         projetoCodigo: v.projeto_codigo,
       }
@@ -135,23 +159,39 @@ export async function buscarBoletosPorOrcamento(orcamentoId: string): Promise<Bo
   }))
 }
 
-// SPEC-072: busca cruza só a venda informada (orcamento_numero) — diferente
-// da busca de venda de origem da SPEC-071 (devolução), que cruza todos os
-// projetos do cliente. Aqui o usuário já sabe o número da venda (replica a
-// tela antiga do Connect, campo "Venda").
+// SPEC-072: busca cruza só a venda informada — diferente da busca de venda de
+// origem da SPEC-071 (devolução), que cruza todos os projetos do cliente.
+// SPEC-136: aceita tanto o número do orçamento de origem (ORC-XXXX, único
+// identificador que existia até aqui) quanto o número da venda propriamente
+// dito (VENDA-XXXX, novo) — orçamentos aprovados antes desta SPEC não têm
+// venda_numero (sem backfill), por isso o fallback continua necessário.
 export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaInfo | null> {
   const numero = numeroVenda.trim()
   if (!numero) return null
 
-  const { data: saldoRows, error: saldoError } = await supabase
-    .from('vw_estoque_saldos_projeto_item')
-    .select(
-      'orcamento_id, projeto_item_id, produto_id, cliente_id, produto, produto_codigo, projeto_codigo, orcamento_numero, q_venda, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue, q_devolvida, q_transferida_saida, status_operacional',
-    )
-    .eq('orcamento_numero', numero)
-    .eq('status_operacional', 'ativo')
+  const camposSelecionados =
+    'orcamento_id, projeto_item_id, produto_id, cliente_id, produto, produto_codigo, projeto_codigo, orcamento_numero, venda_numero, q_venda, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue, q_devolvida, q_transferida_saida, status_operacional'
 
-  if (saldoError) throw saldoError
+  // Duas buscas .eq() separadas (em vez de .or() com o valor digitado
+  // interpolado na string do filtro) para não expor injeção no filtro
+  // PostgREST via vírgula/parênteses no que o usuário digitar.
+  const [porOrcamento, porVenda] = await Promise.all([
+    supabase
+      .from('vw_estoque_saldos_projeto_item')
+      .select(camposSelecionados)
+      .eq('orcamento_numero', numero)
+      .eq('status_operacional', 'ativo'),
+    supabase
+      .from('vw_estoque_saldos_projeto_item')
+      .select(camposSelecionados)
+      .eq('venda_numero', numero)
+      .eq('status_operacional', 'ativo'),
+  ])
+
+  if (porOrcamento.error) throw porOrcamento.error
+  if (porVenda.error) throw porVenda.error
+
+  const saldoRows = (porOrcamento.data?.length ? porOrcamento.data : porVenda.data) as any[]
   if (!saldoRows || saldoRows.length === 0) return null
 
   const projetoItemIds = saldoRows.map((r: any) => r.projeto_item_id)
@@ -214,7 +254,8 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
 
   return {
     orcamentoId: saldoRows[0].orcamento_id,
-    orcamentoNumero: numero,
+    orcamentoNumero: saldoRows[0].orcamento_numero,
+    vendaNumero: saldoRows[0].venda_numero,
     clienteId: saldoRows[0].cliente_id,
     clienteNome,
     projetoCodigo: saldoRows[0].projeto_codigo,
@@ -383,24 +424,61 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
   // SPEC-090 adicionou alterado_por (também FK pra usuarios) em `separacoes`
   // — com 2 FKs pra usuarios, o embed implícito "usuarios(nome)" fica
   // ambíguo pro PostgREST; precisa apontar explicitamente pra
-  // responsavel_id.
+  // responsavel_id. SPEC-143: embed de separacao_baixas vem como array
+  // (1 no máximo, por causa do índice UNIQUE em separacao_id) — mais
+  // simples de tratar no cliente do que depender do PostgREST inferir
+  // a cardinalidade um-pra-um.
   const { data, error } = await supabase
     .from('separacoes')
     .select(
-      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id)',
+      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id), ' +
+        'baixas:separacao_baixas(id, codigo, responsavel_retirou, data_baixa, funcionario:usuarios!funcionario_id(nome))',
     )
     .eq('numero_venda', numero)
     .order('created_at', { ascending: false })
 
   if (error) throw error
 
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    criadoEm: row.created_at,
-    responsavelNome: row.responsavel?.nome ?? null,
-    status: row.status,
-    itens: row.itens?.length || 0,
-  }))
+  return (data || []).map((row: any) => {
+    const baixaRow = row.baixas?.[0] ?? null
+    return {
+      id: row.id,
+      criadoEm: row.created_at,
+      responsavelNome: row.responsavel?.nome ?? null,
+      status: row.status,
+      itens: row.itens?.length || 0,
+      baixa: baixaRow
+        ? {
+            id: baixaRow.id,
+            codigo: baixaRow.codigo,
+            funcionarioNome: baixaRow.funcionario?.nome ?? null,
+            responsavelRetirou: baixaRow.responsavel_retirou,
+            dataBaixa: baixaRow.data_baixa,
+          }
+        : null,
+    }
+  })
+}
+
+// SPEC-143: registra a baixa de uma parcial já existente — ação separada de
+// "Separar". Funcionário é sempre quem está logado no momento (mesma regra
+// de `criarSeparacaoParcial`); "Responsável Retirou" é texto livre (quem
+// fisicamente retirou o material, geralmente não é um usuário do sistema).
+export async function registrarBaixaSeparacao(
+  separacaoId: string,
+  responsavelRetirou: string,
+): Promise<void> {
+  const responsavel = responsavelRetirou.trim()
+  if (!responsavel) {
+    throw new Error('Informe quem retirou o material.')
+  }
+  const { data: userData } = await supabase.auth.getUser()
+  const { error } = await supabase.from('separacao_baixas').insert({
+    separacao_id: separacaoId,
+    funcionario_id: userData?.user?.id || null,
+    responsavel_retirou: responsavel,
+  })
+  if (error) throw error
 }
 
 // SPEC-098: troca de peça em Reserva entre dois projetos (mesmo produto),

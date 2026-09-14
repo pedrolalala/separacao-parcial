@@ -46,6 +46,7 @@ import {
   listarLogTrocas,
   listarItensDaParcial,
   estornarItemSeparacao,
+  registrarBaixaSeparacao,
   type VendaInfo,
   type ParcialHistorico,
   type VendaDisponivel,
@@ -196,6 +197,13 @@ export default function SeparacaoParcialPage() {
   const [estornoItens, setEstornoItens] = useState<ItemParcial[]>([])
   const [carregandoEstornoItens, setCarregandoEstornoItens] = useState(false)
   const [estornoQuantidades, setEstornoQuantidades] = useState<Record<string, string>>({})
+
+  // SPEC-143: "Dar Baixa" — ação nova e separada de "Separar" (a pessoa que
+  // registra a parcial pode não ser a mesma que confirma a entrega/retirada
+  // depois). 1 baixa por parcial.
+  const [baixaAlvo, setBaixaAlvo] = useState<ParcialHistorico | null>(null)
+  const [baixaResponsavelRetirou, setBaixaResponsavelRetirou] = useState('')
+  const [registrandoBaixa, setRegistrandoBaixa] = useState(false)
 
   // SPEC-098: troca de peça em Reserva entre projetos (Projetista/gerente/
   // admin) — a permissão é decidida inteiramente no banco
@@ -536,6 +544,39 @@ export default function SeparacaoParcialPage() {
       toast.error('Erro ao estornar separação', { description: err?.message })
     } finally {
       setEstornando(false)
+    }
+  }
+
+  // SPEC-143: "Dar Baixa" — confirma que o material foi entregue/retirado,
+  // numa etapa separada de "Separar". Funcionário é sempre quem está
+  // logado; só pede "Responsável Retirou" (texto livre).
+  const handleAbrirBaixa = (parcial: ParcialHistorico) => {
+    setBaixaAlvo(parcial)
+    setBaixaResponsavelRetirou('')
+  }
+
+  const handleFecharBaixa = () => {
+    setBaixaAlvo(null)
+    setBaixaResponsavelRetirou('')
+  }
+
+  const handleConfirmarBaixa = async () => {
+    if (!baixaAlvo || !venda) return
+    if (!baixaResponsavelRetirou.trim()) {
+      toast.error('Informe quem retirou o material.')
+      return
+    }
+    setRegistrandoBaixa(true)
+    try {
+      await registrarBaixaSeparacao(baixaAlvo.id, baixaResponsavelRetirou.trim())
+      toast.success('Baixa registrada com sucesso.')
+      const historico = await listarParciaisPorVenda(venda.orcamentoNumero)
+      setParciais(historico)
+      handleFecharBaixa()
+    } catch (err: any) {
+      toast.error('Erro ao registrar baixa', { description: err?.message })
+    } finally {
+      setRegistrandoBaixa(false)
     }
   }
 
@@ -927,45 +968,44 @@ export default function SeparacaoParcialPage() {
             {/* Instrução do usuário (2026-09-14): "Boletos desta venda" foi
                 removido por completo desta tela — nenhuma informação
                 financeira (boleto, valor, parcela, vencimento) aparece
-                aqui. A área de baixa ("Parciais desta venda") fica
-                totalmente oculta até a 1ª baixa (mesma ação de "Separar")
-                acontecer; quando aparece, só tem dados de controle
-                operacional: Código, Data Baixa, Funcionário e Responsável
-                Retirou (mesmo dado do Funcionário — confirmado com o
-                usuário que não existe pessoa distinta registrada pra
-                quem retirou). */}
+                aqui. SPEC-143: "Dar Baixa" é uma ação separada de
+                "Separar" — quem pediu a parcial (Funcionário, acima da
+                divisória) pode ser diferente de quem confirma a
+                entrega/retirada depois (área de baixa, abaixo da
+                divisória, com seu próprio Código/Data/Funcionário +
+                Responsável Retirou). Sem baixa registrada ainda, mostra um
+                botão "Dar Baixa" no lugar da tabela de baixa. */}
             {parciais.length > 0 && (
               <div ref={parciaisSectionRef} className="bg-card border rounded-xl p-4 scroll-mt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <History className="w-4 h-4 text-muted-foreground" />
                   <h2 className="font-semibold text-sm">Parciais desta venda</h2>
                 </div>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Código</TableHead>
-                      <TableHead>Data Baixa</TableHead>
-                      <TableHead>Funcionário</TableHead>
-                      <TableHead>Responsável Retirou</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {parciais.map((p) => (
-                      <TableRow key={p.id}>
-                        <TableCell className="font-mono text-xs">
-                          {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
-                        </TableCell>
-                        <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
-                        <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
-                        <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
-                        <TableCell>
+                <div className="space-y-3">
+                  {parciais.map((p) => (
+                    <div key={p.id} className="border rounded-lg p-3">
+                      {/* Registro da parcial — quem pediu. */}
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm">
+                          <span>
+                            <span className="text-muted-foreground">Parcial: </span>
+                            <span className="font-mono">
+                              {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
+                            </span>
+                          </span>
+                          <span>
+                            <span className="text-muted-foreground">Funcionário: </span>
+                            {p.responsavelNome || '-'}
+                          </span>
+                          <span>
+                            <span className="text-muted-foreground">Data Parcial: </span>
+                            {fmtData(p.criadoEm)}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
                           <Badge variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}>
                             {p.status}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
                           {p.status !== 'Cancelado' && (
                             <Button
                               variant="ghost"
@@ -976,11 +1016,46 @@ export default function SeparacaoParcialPage() {
                               Estornar
                             </Button>
                           )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                        </div>
+                      </div>
+
+                      {/* Divisória — separa o registro da parcial (acima)
+                          da área de baixa (abaixo). */}
+                      <div className="border-t mt-3 pt-3">
+                        {p.baixa ? (
+                          <div className="overflow-x-auto">
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead>Código</TableHead>
+                                  <TableHead>Data Baixa</TableHead>
+                                  <TableHead>Funcionário</TableHead>
+                                  <TableHead>Responsável Retirou</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                <TableRow>
+                                  <TableCell className="font-mono text-xs">{p.baixa.codigo}</TableCell>
+                                  <TableCell className="text-sm">{fmtDataHora(p.baixa.dataBaixa)}</TableCell>
+                                  <TableCell className="text-sm">{p.baixa.funcionarioNome || '-'}</TableCell>
+                                  <TableCell className="text-sm">{p.baixa.responsavelRetirou}</TableCell>
+                                </TableRow>
+                              </TableBody>
+                            </Table>
+                          </div>
+                        ) : p.status === 'Cancelado' ? (
+                          <p className="text-xs text-muted-foreground">
+                            Separação cancelada — sem baixa.
+                          </p>
+                        ) : (
+                          <Button variant="outline" size="sm" onClick={() => handleAbrirBaixa(p)}>
+                            Dar Baixa
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </>
@@ -1073,6 +1148,49 @@ export default function SeparacaoParcialPage() {
             >
               {estornando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Estornar peça(s) selecionada(s)
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-143: "Dar Baixa" — confirma a entrega/retirada de uma parcial
+          já separada. Só pede quem retirou; funcionário é sempre quem está
+          logado. */}
+      <Dialog open={!!baixaAlvo} onOpenChange={(open) => !open && handleFecharBaixa()}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Dar Baixa</DialogTitle>
+          </DialogHeader>
+          {baixaAlvo && (
+            <p className="text-sm text-muted-foreground">
+              Parcial{' '}
+              <span className="font-mono">
+                {venda?.orcamentoNumero}-P{numerosParciais.get(baixaAlvo.id) ?? '?'}
+              </span>
+              . Confirme quem retirou o material — a data e o funcionário são
+              registrados automaticamente.
+            </p>
+          )}
+          <div className="space-y-1">
+            <label className="text-xs font-semibold uppercase text-muted-foreground">
+              Responsável Retirou *
+            </label>
+            <Input
+              value={baixaResponsavelRetirou}
+              onChange={(e) => setBaixaResponsavelRetirou(e.target.value)}
+              placeholder="Nome de quem retirou o material"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleFecharBaixa} disabled={registrandoBaixa}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleConfirmarBaixa}
+              disabled={registrandoBaixa || !baixaResponsavelRetirou.trim()}
+            >
+              {registrandoBaixa ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Confirmar Baixa
             </Button>
           </DialogFooter>
         </DialogContent>
