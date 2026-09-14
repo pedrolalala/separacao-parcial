@@ -4,7 +4,6 @@ import {
   Scissors,
   LogOut,
   History,
-  Receipt,
   ArrowLeft,
   Search,
   Building2,
@@ -41,7 +40,6 @@ import {
   finalizarSeparacaoPronta,
   listarParciaisPorVenda,
   listarVendasDisponiveis,
-  buscarBoletosPorOrcamento,
   podeTrocarReserva,
   getReservasOutrosProjetos,
   trocarReserva,
@@ -51,7 +49,6 @@ import {
   type VendaInfo,
   type ParcialHistorico,
   type VendaDisponivel,
-  type BoletoResumo,
   type ItemVenda,
   type ReservaOutroProjeto,
   type LogTroca,
@@ -174,7 +171,6 @@ export default function SeparacaoParcialPage() {
   const [saving, setSaving] = useState(false)
   const [venda, setVenda] = useState<VendaInfo | null>(null)
   const [parciais, setParciais] = useState<ParcialHistorico[]>([])
-  const [boletos, setBoletos] = useState<BoletoResumo[]>([])
   // SPEC-072: quantidade digitada na coluna "À Separar", por projeto_item_id
   // — zerada a cada "Separar" bem-sucedido.
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
@@ -270,12 +266,12 @@ export default function SeparacaoParcialPage() {
   )
   const vendaSemReserva = venda != null && venda.itens.every((i) => i.q_reserva <= 0)
   const precisaFinalizarManualmente = vendaSemReserva && parciaisPendentes.length > 0
-  // SPEC-138 (Prompt 7): boletos só devem aparecer depois de alguma baixa
-  // física registrada — decisão default (usuário não fechou isso no
-  // documento de origem): libera já na 1ª separação parcial confirmada,
-  // não só na entrega 100% concluída. Cada linha de `parciais` já É um
-  // registro de baixa de separação/entrega parcial.
-  const houveBaixaRegistrada = parciais.some((p) => p.status !== 'Cancelado')
+  // Instrução do usuário (2026-09-14): "Boletos desta venda" removido por
+  // completo (nenhuma informação financeira nesta tela) e a área de baixa
+  // ("Parciais desta venda") só aparece depois da 1ª baixa registrada —
+  // confirmado com o usuário que "dar baixa" é a mesma ação que já existe
+  // (clicar "Separar", que cria uma linha em `parciais`), então o próprio
+  // `parciais.length > 0` já é a condição.
 
   // Achado 14/08: usuário reportou "não consigo adicionar quantidade" e "não
   // tem como reverter" — na prática o campo "À Separar" fica corretamente
@@ -293,7 +289,6 @@ export default function SeparacaoParcialPage() {
     setLoading(true)
     setVenda(null)
     setParciais([])
-    setBoletos([])
     setQuantidades({})
     try {
       const [vendaInfo, historico] = await Promise.all([
@@ -308,11 +303,6 @@ export default function SeparacaoParcialPage() {
       }
       setVenda(vendaInfo)
       setParciais(historico)
-      if (vendaInfo.orcamentoId) {
-        buscarBoletosPorOrcamento(vendaInfo.orcamentoId)
-          .then(setBoletos)
-          .catch((err) => toast.error('Erro ao buscar boletos', { description: err?.message }))
-      }
     } catch (err: any) {
       toast.error('Erro ao buscar venda', { description: err?.message })
     } finally {
@@ -326,7 +316,6 @@ export default function SeparacaoParcialPage() {
     setVenda(null)
     setNumeroVenda('')
     setParciais([])
-    setBoletos([])
     setQuantidades({})
     setDataEntrega('')
     setDataEntregaFinal('')
@@ -932,103 +921,65 @@ export default function SeparacaoParcialPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Instrução do usuário (2026-09-14): "Boletos desta venda" foi
+                removido por completo desta tela — nenhuma informação
+                financeira (boleto, valor, parcela, vencimento) aparece
+                aqui. A área de baixa ("Parciais desta venda") fica
+                totalmente oculta até a 1ª baixa (mesma ação de "Separar")
+                acontecer; quando aparece, só tem dados de controle
+                operacional: Código, Data Baixa, Funcionário e Responsável
+                Retirou (mesmo dado do Funcionário — confirmado com o
+                usuário que não existe pessoa distinta registrada pra
+                quem retirou). */}
+            {parciais.length > 0 && (
               <div ref={parciaisSectionRef} className="bg-card border rounded-xl p-4 scroll-mt-4">
                 <div className="flex items-center gap-2 mb-3">
                   <History className="w-4 h-4 text-muted-foreground" />
                   <h2 className="font-semibold text-sm">Parciais desta venda</h2>
                 </div>
-                {parciais.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">
-                    Nenhuma separação parcial registrada ainda para esta venda.
-                  </p>
-                ) : (
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Parcial</TableHead>
-                        <TableHead>Funcionário</TableHead>
-                        <TableHead>Data</TableHead>
-                        <TableHead>Itens</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead />
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {parciais.map((p) => (
-                        <TableRow key={p.id}>
-                          <TableCell className="font-mono text-xs">
-                            {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
-                          </TableCell>
-                          <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
-                          <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
-                          <TableCell className="text-sm">{p.itens}</TableCell>
-                          <TableCell>
-                            <Badge variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}>
-                              {p.status}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {p.status !== 'Cancelado' && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => handleAbrirEstorno(p)}
-                              >
-                                Estornar
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
-              </div>
-
-              <div className="bg-card border rounded-xl p-4">
-                <div className="flex items-center gap-2 mb-3">
-                  <Receipt className="w-4 h-4 text-muted-foreground" />
-                  <h2 className="font-semibold text-sm">Boletos desta venda</h2>
-                </div>
-                {!houveBaixaRegistrada ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">
-                    Disponível após a baixa da entrega/parcial.
-                  </p>
-                ) : boletos.length === 0 ? (
-                  <p className="text-sm text-muted-foreground py-4 text-center">
-                    Nenhum boleto encontrado para esta venda.
-                  </p>
-                ) : (
-                  <>
-                    {/* SPEC-072: Separação Parcial não é tela financeira —
-                        usuário pediu explicitamente pra tirar valor e
-                        vencimento, só número do boleto e quantas parcelas
-                        ainda faltam finalizar. */}
-                    <p className="text-sm text-muted-foreground mb-3">
-                      {boletos.filter((b) => !b.finalizado).length} de {boletos.length} parcela(s)
-                      pendente(s)
-                    </p>
-                    <ul className="space-y-1.5">
-                      {boletos.map((b) => (
-                        <li
-                          key={b.id}
-                          className="flex items-center justify-between text-sm py-1.5 px-2 rounded-md bg-muted/40"
-                        >
-                          <span className="font-mono">{b.nossoNumero}</span>
-                          <Badge variant={b.finalizado ? 'outline' : 'secondary'}>
-                            {b.finalizado
-                              ? 'Finalizado'
-                              : `Parcela ${b.numParcela}/${b.totalParcelas}`}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Código</TableHead>
+                      <TableHead>Data Baixa</TableHead>
+                      <TableHead>Funcionário</TableHead>
+                      <TableHead>Responsável Retirou</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {parciais.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell className="font-mono text-xs">
+                          {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
+                        </TableCell>
+                        <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
+                        <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
+                        <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
+                        <TableCell>
+                          <Badge variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}>
+                            {p.status}
                           </Badge>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                )}
+                        </TableCell>
+                        <TableCell>
+                          {p.status !== 'Cancelado' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive hover:text-destructive"
+                              onClick={() => handleAbrirEstorno(p)}
+                            >
+                              Estornar
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
-            </div>
+            )}
           </>
         )}
       </main>
