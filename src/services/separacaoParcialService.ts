@@ -34,24 +34,12 @@ export interface VendaInfo {
   itens: ItemVenda[]
 }
 
-// SPEC-143: "Dar Baixa" — ação nova e separada de "Separar" (confirmado com
-// o usuário: quem pediu/registrou a parcial pode ser uma pessoa diferente
-// de quem confirma a entrega/retirada depois). 1 baixa por parcial.
-export interface BaixaParcial {
-  id: string
-  codigo: number
-  funcionarioNome: string | null
-  responsavelRetirou: string
-  dataBaixa: string
-}
-
 export interface ParcialHistorico {
   id: string
   criadoEm: string
   responsavelNome: string | null
   status: string
   itens: number
-  baixa: BaixaParcial | null
 }
 
 export interface VendaDisponivel {
@@ -424,61 +412,24 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
   // SPEC-090 adicionou alterado_por (também FK pra usuarios) em `separacoes`
   // — com 2 FKs pra usuarios, o embed implícito "usuarios(nome)" fica
   // ambíguo pro PostgREST; precisa apontar explicitamente pra
-  // responsavel_id. SPEC-143: embed de separacao_baixas vem como array
-  // (1 no máximo, por causa do índice UNIQUE em separacao_id) — mais
-  // simples de tratar no cliente do que depender do PostgREST inferir
-  // a cardinalidade um-pra-um.
+  // responsavel_id.
   const { data, error } = await supabase
     .from('separacoes')
     .select(
-      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id), ' +
-        'baixas:separacao_baixas(id, codigo, responsavel_retirou, data_baixa, funcionario:usuarios!funcionario_id(nome))',
+      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id)',
     )
     .eq('numero_venda', numero)
     .order('created_at', { ascending: false })
 
   if (error) throw error
 
-  return (data || []).map((row: any) => {
-    const baixaRow = row.baixas?.[0] ?? null
-    return {
-      id: row.id,
-      criadoEm: row.created_at,
-      responsavelNome: row.responsavel?.nome ?? null,
-      status: row.status,
-      itens: row.itens?.length || 0,
-      baixa: baixaRow
-        ? {
-            id: baixaRow.id,
-            codigo: baixaRow.codigo,
-            funcionarioNome: baixaRow.funcionario?.nome ?? null,
-            responsavelRetirou: baixaRow.responsavel_retirou,
-            dataBaixa: baixaRow.data_baixa,
-          }
-        : null,
-    }
-  })
-}
-
-// SPEC-143: registra a baixa de uma parcial já existente — ação separada de
-// "Separar". Funcionário é sempre quem está logado no momento (mesma regra
-// de `criarSeparacaoParcial`); "Responsável Retirou" é texto livre (quem
-// fisicamente retirou o material, geralmente não é um usuário do sistema).
-export async function registrarBaixaSeparacao(
-  separacaoId: string,
-  responsavelRetirou: string,
-): Promise<void> {
-  const responsavel = responsavelRetirou.trim()
-  if (!responsavel) {
-    throw new Error('Informe quem retirou o material.')
-  }
-  const { data: userData } = await supabase.auth.getUser()
-  const { error } = await supabase.from('separacao_baixas').insert({
-    separacao_id: separacaoId,
-    funcionario_id: userData?.user?.id || null,
-    responsavel_retirou: responsavel,
-  })
-  if (error) throw error
+  return (data || []).map((row: any) => ({
+    id: row.id,
+    criadoEm: row.created_at,
+    responsavelNome: row.responsavel?.nome ?? null,
+    status: row.status,
+    itens: row.itens?.length || 0,
+  }))
 }
 
 // SPEC-098: troca de peça em Reserva entre dois projetos (mesmo produto),
