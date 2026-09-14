@@ -701,7 +701,10 @@ export default function SeparacaoParcialPage() {
                         onClick={() => !loading && handleLocalizar(v.orcamentoNumero)}
                         className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''}`}
                       >
-                        <TableCell className="font-semibold text-primary text-sm">
+                        {/* SPEC-138 (Prompt 4): referências de orçamento/venda em
+                            cor escura + semibold + leve letter-spacing, pra
+                            leitura rápida em tela de gestão. */}
+                        <TableCell className="font-semibold text-[#333333] tracking-wide text-sm">
                           {v.orcamentoNumero}
                         </TableCell>
                         <TableCell className="text-sm">{v.vendaNumero || '—'}</TableCell>
@@ -784,7 +787,7 @@ export default function SeparacaoParcialPage() {
                   <TableBody>
                     {venda.itens.map((item) => (
                       <TableRow key={item.projeto_item_id}>
-                        <TableCell className="font-mono text-primary text-sm">
+                        <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm">
                           {item.codigo ?? '-'}
                         </TableCell>
                         <TableCell
@@ -1280,7 +1283,9 @@ export default function SeparacaoParcialPage() {
                   {logTrocas.map((t) => (
                     <TableRow key={t.id}>
                       <TableCell className="text-sm">
-                        <span className="font-mono text-primary">{t.produtoCodigo ?? '-'}</span>
+                        <span className="font-mono font-semibold text-[#333333] tracking-wide">
+                          {t.produtoCodigo ?? '-'}
+                        </span>
                         <br />
                         <span className="text-xs text-muted-foreground">
                           {t.produtoDescricao || '-'}
