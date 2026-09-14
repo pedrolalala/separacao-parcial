@@ -677,8 +677,11 @@ export default function SeparacaoParcialPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Orçamento</TableHead>
+                      {/* Pedido do usuário (2026-09-14): Venda antes de
+                          Orçamento — antes o número da venda ficava
+                          escondido depois do orçamento. */}
                       <TableHead>Venda</TableHead>
+                      <TableHead>Orçamento</TableHead>
                       <TableHead>Cliente</TableHead>
                       <TableHead>Projeto</TableHead>
                     </TableRow>
@@ -694,9 +697,9 @@ export default function SeparacaoParcialPage() {
                             cor escura + semibold + leve letter-spacing, pra
                             leitura rápida em tela de gestão. */}
                         <TableCell className="font-semibold text-[#333333] tracking-wide text-sm">
-                          {v.orcamentoNumero}
+                          {v.vendaNumero || '—'}
                         </TableCell>
-                        <TableCell className="text-sm">{v.vendaNumero || '—'}</TableCell>
+                        <TableCell className="text-sm">{v.orcamentoNumero}</TableCell>
                         <TableCell className="text-sm">
                           {v.clienteNome || 'Cliente não identificado'}
                         </TableCell>
