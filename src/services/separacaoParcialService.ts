@@ -32,6 +32,19 @@ export interface VendaInfo {
   clienteNome: string | null
   projetoCodigo: string | null
   itens: ItemVenda[]
+  // SPEC-144: campos usados só na impressão do "Pedido em Separação"
+  // (layout baseado no documento do Connect) — todos opcionais, cliente ou
+  // orçamento podem ter cadastro incompleto sem impedir a impressão.
+  empresaNome: string | null
+  dataEmissaoOrcamento: string | null
+  vendedorNome: string | null
+  clienteCpfCnpj: string | null
+  clienteTelefone: string | null
+  clienteEndereco: string | null
+  clienteNumero: string | null
+  clienteBairro: string | null
+  clienteCidade: string | null
+  clienteEstado: string | null
 }
 
 export interface ParcialHistorico {
@@ -191,6 +204,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     { data: piRows, error: piError },
     { data: produtoRows, error: produtoError },
     { data: clienteRow, error: clienteError },
+    { data: orcamentoRow, error: orcamentoError },
   ] = await Promise.all([
     supabase.from('projeto_itens').select('id, l_fixo').in('id', projetoItemIds),
     produtoIds.length > 0
@@ -199,8 +213,19 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     saldoRows[0].cliente_id
       ? supabase
           .from('contatos')
-          .select('id, nome, razao_social')
+          .select(
+            'id, nome, razao_social, cpf_cnpj, telefone, celular, endereco, numero, bairro, cidade, estado',
+          )
           .eq('id', saldoRows[0].cliente_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    // SPEC-144: dados de impressão (empresa/vendedor/data do orçamento) —
+    // buscados à parte pois vw_estoque_saldos_projeto_item não os expõe.
+    saldoRows[0].orcamento_id
+      ? supabase
+          .from('orcamentos')
+          .select('data_emissao, empresa:empresas(nome), vendedor:funcionarios(nome)')
+          .eq('id', saldoRows[0].orcamento_id)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
   ])
@@ -208,6 +233,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
   if (piError) throw piError
   if (produtoError) throw produtoError
   if (clienteError) throw clienteError
+  if (orcamentoError) throw orcamentoError
 
   const piMap = new Map((piRows || []).map((p: any) => [p.id, p]))
   const produtoMap = new Map((produtoRows || []).map((p: any) => [p.id, p]))
@@ -248,6 +274,16 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     clienteNome,
     projetoCodigo: saldoRows[0].projeto_codigo,
     itens,
+    empresaNome: (orcamentoRow as any)?.empresa?.nome ?? null,
+    dataEmissaoOrcamento: (orcamentoRow as any)?.data_emissao ?? null,
+    vendedorNome: (orcamentoRow as any)?.vendedor?.nome ?? null,
+    clienteCpfCnpj: (clienteRow as any)?.cpf_cnpj ?? null,
+    clienteTelefone: (clienteRow as any)?.telefone || (clienteRow as any)?.celular || null,
+    clienteEndereco: (clienteRow as any)?.endereco ?? null,
+    clienteNumero: (clienteRow as any)?.numero ?? null,
+    clienteBairro: (clienteRow as any)?.bairro ?? null,
+    clienteCidade: (clienteRow as any)?.cidade ?? null,
+    clienteEstado: (clienteRow as any)?.estado ?? null,
   }
 }
 

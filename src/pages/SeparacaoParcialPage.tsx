@@ -70,14 +70,23 @@ const fmtDataHora = (iso: string) =>
     minute: '2-digit',
   })
 
+const fmtDataCurta = (iso: string | null) => (iso ? fmtData(iso) : '-')
+
 // SPEC-091 + SPEC-093: gera e já abre o diálogo de impressão (o usuário
 // escolhe "Salvar como PDF" ou imprimir direto) assim que uma separação é
 // confirmada — sem precisar de biblioteca de PDF nova nem Edge Function,
 // reaproveita a impressão nativa do navegador. Mesmo documento serve pra
 // imprimir a lista de separação (não existia nenhum layout de impressão
 // antes desta SPEC).
+// SPEC-144: layout redesenhado a partir do "Pedido em Separação" do Connect
+// (documento físico que a equipe de expedição já conhece) — número da
+// parcial+venda no topo, empresa real da venda (Foco/Manoella/Islight),
+// dados completos do cliente/vendedor, e os dois blocos de assinatura de
+// conferência do documento original.
 function imprimirListaSeparacao(params: {
   venda: VendaInfo
+  numeroSeparacao: number
+  dataEntregaInformada: string
   itensSeparados: {
     descricao: string
     codigo: number | null
@@ -89,6 +98,8 @@ function imprimirListaSeparacao(params: {
 }) {
   const janela = window.open('', '_blank', 'width=800,height=900')
   if (!janela) return
+
+  const { venda } = params
 
   // SPEC-138 (Prompt 6): localizador "L" (mesmo dado da coluna
   // "Classificação" em tela, vindo de projeto_itens.l_fixo), coluna de
@@ -112,31 +123,70 @@ function imprimirListaSeparacao(params: {
     )
     .join('')
 
+  const numeroPedido = `${venda.orcamentoNumero}-P${params.numeroSeparacao} / ${venda.vendaNumero || '-'}`
+  const endereco = venda.clienteEndereco
+    ? `${venda.clienteEndereco}${venda.clienteNumero ? ', ' + venda.clienteNumero : ''}`
+    : '-'
+  const cidadeEstado = venda.clienteCidade
+    ? `${venda.clienteCidade}${venda.clienteEstado ? '-' + venda.clienteEstado : ''}`
+    : '-'
+
   janela.document.write(`
     <html>
       <head>
-        <title>Separação ${params.venda.orcamentoNumero}</title>
+        <meta charset="utf-8" />
+        <title>Pedido em Separação ${numeroPedido}</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 24px; color: #111; }
-          h1 { font-size: 18px; margin-bottom: 4px; }
-          .meta { font-size: 13px; color: #555; margin-bottom: 16px; }
-          table { width: 100%; border-collapse: collapse; font-size: 13px; }
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111; font-size: 12px; }
+          .cabecalho { display: flex; justify-content: space-between; align-items: flex-start; }
+          .cabecalho .num { font-weight: bold; font-size: 13px; }
+          .cabecalho .titulo { text-align: center; font-weight: bold; font-size: 14px; flex: 1; }
+          .cabecalho .impressao { text-align: right; color: #555; }
+          .empresa-linha { display: flex; justify-content: space-between; margin-top: 6px; }
+          .empresa-linha .empresa { font-weight: bold; font-size: 13px; }
+          .empresa-linha .datas { text-align: right; }
+          .dados-cliente { margin-top: 10px; border-top: 1px solid #999; border-bottom: 1px solid #999; padding: 6px 0; }
+          .dados-cliente .linha { display: flex; justify-content: space-between; gap: 16px; }
+          .dados-cliente .linha span:first-child { white-space: nowrap; }
+          table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 14px; }
           th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
           th { background: #f3f3f3; }
           td.marcar { text-align: center; font-size: 16px; width: 28px; }
           tfoot td { font-weight: bold; background: #f9f9f9; }
-          .observacoes { margin-top: 20px; font-size: 13px; }
+          .observacoes { margin-top: 20px; font-size: 12px; }
           .observacoes .linha { border-bottom: 1px solid #999; height: 22px; margin-top: 10px; }
+          .assinaturas { margin-top: 36px; }
+          .assinaturas .bloco { display: flex; justify-content: space-around; margin-top: 30px; text-align: center; font-size: 11px; }
+          .assinaturas .bloco div { border-top: 1px solid #333; padding-top: 4px; width: 200px; }
+          .declaracao { margin-top: 24px; font-size: 10px; font-style: italic; text-align: center; }
         </style>
       </head>
       <body>
-        <h1>Lista de Separação — Orçamento ${params.venda.orcamentoNumero}</h1>
-        <div class="meta">
-          Venda: ${params.venda.vendaNumero || '-'}<br />
-          Cliente: ${params.venda.clienteNome || '-'}<br />
-          Projeto: ${params.venda.projetoCodigo || '-'}<br />
-          Separado por: ${params.responsavelNome}<br />
-          Data: ${new Date().toLocaleString('pt-BR')}
+        <div class="cabecalho">
+          <div class="num">${numeroPedido}</div>
+          <div class="titulo">PEDIDO EM SEPARAÇÃO - VENDAS - VENDAS</div>
+          <div class="impressao">Impressão: ${new Date().toLocaleString('pt-BR')}</div>
+        </div>
+        <div class="empresa-linha">
+          <div class="empresa">${venda.empresaNome || 'LUCENERA'}</div>
+          <div class="datas">
+            Data orçamento: ${fmtDataCurta(venda.dataEmissaoOrcamento)}<br />
+            Previsão de Entrega: ${params.dataEntregaInformada ? fmtDataCurta(params.dataEntregaInformada) : 'A combinar'}
+          </div>
+        </div>
+        <div class="dados-cliente">
+          <div class="linha">
+            <span>Nome.....: ${venda.clienteCpfCnpj || '-'} ${venda.projetoCodigo || '-'} ${venda.clienteNome || '-'}</span>
+            <span>Telefone: ${venda.clienteTelefone || '-'}</span>
+          </div>
+          <div class="linha">
+            <span>Endereco.: ${endereco}</span>
+            <span>Bairro: ${venda.clienteBairro || '-'}</span>
+          </div>
+          <div class="linha">
+            <span>Cidade...: ${cidadeEstado}</span>
+            <span>Vendedor: ${venda.vendedorNome || '-'}</span>
+          </div>
         </div>
         <table>
           <thead>
@@ -152,6 +202,24 @@ function imprimirListaSeparacao(params: {
           <div class="linha"></div>
           <div class="linha"></div>
           <div class="linha"></div>
+        </div>
+        <div class="assinaturas">
+          <div class="bloco">
+            <div>Conferido: Ass. Conferente</div>
+            <div>Data/Hora</div>
+          </div>
+          <div class="declaracao">
+            ASSUMO TOTAL RESPONSABILIDADE PELAS MERCADORIAS CORRESPONDENTES A ESTA ENTREGA,
+            BEM COMO DECLARO CORRETO O CONTEÚDO E QUANTIDADES MENCIONADAS ACIMA.
+          </div>
+          <div class="bloco">
+            <div>Conferido: Ass. Conferente</div>
+            <div>RG/CPF</div>
+            <div>Data/Hora</div>
+          </div>
+        </div>
+        <div class="observacoes" style="margin-top:16px; color:#777;">
+          Separado por: ${params.responsavelNome}
         </div>
       </body>
     </html>
@@ -363,8 +431,13 @@ export default function SeparacaoParcialPage() {
 
       // SPEC-091: gera e abre a impressão da lista assim que a separação é
       // confirmada — sem precisar de um clique extra.
+      // SPEC-144: número da parcial impressa = próximo da sequência já
+      // exibida em "Parciais desta venda" (parciais.length ainda não inclui
+      // a que acabou de ser criada, pois o refetch só acontece depois).
       imprimirListaSeparacao({
         venda,
+        numeroSeparacao: parciais.length + 1,
+        dataEntregaInformada: dataEntrega,
         itensSeparados: itens.map((i) => {
           const original = venda.itens.find((v) => v.projeto_item_id === i.projetoItemId)
           return {
