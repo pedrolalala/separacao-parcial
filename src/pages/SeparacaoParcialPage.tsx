@@ -718,7 +718,7 @@ export default function SeparacaoParcialPage() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 max-w-[1400px] w-full mx-auto">
+      <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 w-full">
         {!venda ? (
           <div className="bg-card border rounded-xl p-4">
             <label className="text-xs font-semibold uppercase text-muted-foreground">
@@ -828,19 +828,21 @@ export default function SeparacaoParcialPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Código</TableHead>
-                      <TableHead className="max-w-[140px]">Referência</TableHead>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead className="max-w-[110px]">Local (L)</TableHead>
-                      <TableHead className="text-right">Q. Dev.</TableHead>
-                      <TableHead className="text-right">Q. Venda</TableHead>
-                      <TableHead className="text-right">E. Futura</TableHead>
-                      <TableHead className="text-right">Transferido</TableHead>
-                      <TableHead className="text-right">Reserva</TableHead>
-                      <TableHead className="text-right bg-primary/5">À Separar</TableHead>
-                      <TableHead className="text-right">Ag. Separar</TableHead>
-                      <TableHead className="text-right">Separado</TableHead>
-                      <TableHead className="text-right">Entregue</TableHead>
+                      <TableHead className="whitespace-nowrap px-3">Código</TableHead>
+                      <TableHead className="px-3">Referência</TableHead>
+                      <TableHead className="min-w-[220px]">Descrição</TableHead>
+                      <TableHead className="whitespace-nowrap px-3">Local (L)</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Q. Dev.</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Q. Venda</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">E. Futura</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Transferido</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Reserva</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2 bg-primary/5">
+                        À Separar
+                      </TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Ag. Separar</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Separado</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">Entregue</TableHead>
                       {/* SPEC-138 (Prompt 5): coluna de ação fixa à direita
                           dentro do overflow-x-auto — evita rolar até o fim
                           pra alcançar o botão "Trocar". */}
@@ -852,41 +854,34 @@ export default function SeparacaoParcialPage() {
                   <TableBody>
                     {venda.itens.map((item) => (
                       <TableRow key={item.projeto_item_id}>
-                        <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm">
+                        <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm whitespace-nowrap px-3">
                           {item.codigo ?? '-'}
                         </TableCell>
-                        <TableCell
-                          className="text-sm max-w-[140px] truncate"
-                          title={item.referencia || ''}
-                        >
+                        <TableCell className="text-sm break-words px-3">
                           {item.referencia || '-'}
                         </TableCell>
-                        <TableCell
-                          className="text-sm max-w-[240px] truncate"
-                          title={item.descricao || ''}
-                        >
+                        <TableCell className="text-sm break-words min-w-[220px]">
                           {item.descricao || '-'}
                         </TableCell>
-                        <TableCell
-                          className="text-sm max-w-[110px] truncate"
-                          title={item.classificacao || ''}
-                        >
+                        <TableCell className="text-sm whitespace-nowrap px-3">
                           {item.classificacao || '-'}
                         </TableCell>
-                        <TableCell className="text-right text-sm">{item.q_devolvida}</TableCell>
-                        <TableCell className="text-right text-sm font-semibold">
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
+                          {item.q_devolvida}
+                        </TableCell>
+                        <TableCell className="text-right text-sm font-semibold whitespace-nowrap px-2">
                           {item.q_venda}
                         </TableCell>
-                        <TableCell className="text-right text-sm">
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_entrega_futura}
                         </TableCell>
-                        <TableCell className="text-right text-sm">
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_transferida_saida}
                         </TableCell>
-                        <TableCell className="text-right text-sm font-semibold text-emerald-700">
+                        <TableCell className="text-right text-sm font-semibold text-emerald-700 whitespace-nowrap px-2">
                           {item.q_reserva}
                         </TableCell>
-                        <TableCell className="bg-primary/5">
+                        <TableCell className="bg-primary/5 px-2">
                           {item.q_reserva <= 0 && item.q_ag_separar > 0 ? (
                             <button
                               type="button"
@@ -915,9 +910,15 @@ export default function SeparacaoParcialPage() {
                             />
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-sm">{item.q_ag_separar}</TableCell>
-                        <TableCell className="text-right text-sm">{item.q_separado}</TableCell>
-                        <TableCell className="text-right text-sm">{item.q_entregue}</TableCell>
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
+                          {item.q_ag_separar}
+                        </TableCell>
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
+                          {item.q_separado}
+                        </TableCell>
+                        <TableCell className="text-right text-sm whitespace-nowrap px-2">
+                          {item.q_entregue}
+                        </TableCell>
                         {podeTrocar && (
                           <TableCell className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
                             {item.q_reserva > 0 && (
