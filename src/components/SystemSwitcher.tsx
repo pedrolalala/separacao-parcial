@@ -16,20 +16,12 @@ interface SystemSwitcherProps {
   showHubLink?: boolean
 }
 
-// SPEC-120: menu retrátil pra trocar de sistema sem voltar pela Central e
-// sem novo login (SSO via redirectWithCode). Lista só os sistemas que o
-// usuário logado tem permissão de ver — ver useSistemasPermitidos.ts.
-// Componente autocontido: resolve o próprio usuário internamente, então não
-// depende do formato de useAuth de cada sistema (que varia bastante entre
-// os ~10 repositórios hoje).
-//
-// Achado (2026-09-16): a versão original ficava fixa no canto direito,
-// centralizada verticalmente (`top-1/2 -translate-y-1/2`), o que em telas
-// com tabela densa (Separação Parcial) sobrepunha a coluna de ações
-// ("Trocar", também `sticky right-0`) e outras informações da tela. Movido
-// pro canto inferior direito (mesmo padrão de um launcher/chat widget) —
-// cresce a partir do canto, nunca cobre o meio da página independente do
-// tamanho do conteúdo (poucos ou muitos sistemas na lista).
+// SPEC-120: menu lateral retrátil (canto direito) pra trocar de sistema sem
+// voltar pela Central e sem novo login (SSO via redirectWithCode). Lista só
+// os sistemas que o usuário logado tem permissão de ver — ver
+// useSistemasPermitidos.ts. Componente autocontido: resolve o próprio
+// usuário internamente, então não depende do formato de useAuth de cada
+// sistema (que varia bastante entre os ~10 repositórios hoje).
 export function SystemSwitcher({ currentSlug, showHubLink = true }: SystemSwitcherProps) {
   const [expanded, setExpanded] = useState(false)
   const { sistemas, userId } = useSistemasPermitidos(currentSlug)
@@ -48,7 +40,7 @@ export function SystemSwitcher({ currentSlug, showHubLink = true }: SystemSwitch
   return (
     <div
       className={cn(
-        'fixed right-4 bottom-4 z-40 flex flex-col gap-1 rounded-xl border border-border bg-card shadow-lg py-3 transition-[width] duration-200 max-h-[70vh] overflow-y-auto',
+        'fixed right-0 top-1/2 -translate-y-1/2 z-40 flex flex-col gap-1 rounded-l-xl border border-r-0 border-border bg-card shadow-lg py-3 transition-[width] duration-200',
         expanded ? 'px-3 w-60' : 'px-2 w-12',
       )}
     >
