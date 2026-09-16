@@ -268,11 +268,19 @@ export default function SeparacaoParcialPage() {
   // SPEC-098: troca de peça em Reserva entre projetos (Projetista/gerente/
   // admin) — a permissão é decidida inteiramente no banco
   // (pode_trocar_reserva), carregada uma vez no login.
+  // SPEC-149: fluxo parte sempre da venda que PRECISA da peça — o item
+  // clicado na tela (`trocaVendaAtual`) é sempre o DESTINO da troca (recebe
+  // reserva, abate entrega futura); o item escolhido na lista "Reservado
+  // por Cliente/Projeto" (`trocaOrigemEscolhida`) é sempre a ORIGEM (cede
+  // reserva, ganha entrega futura). Antes desta SPEC os papéis estavam
+  // invertidos.
   const [podeTrocar, setPodeTrocar] = useState(false)
-  const [trocaAlvo, setTrocaAlvo] = useState<ItemVenda | null>(null)
+  const [trocaVendaAtual, setTrocaVendaAtual] = useState<ItemVenda | null>(null)
   const [reservasOutras, setReservasOutras] = useState<ReservaOutroProjeto[]>([])
   const [carregandoReservas, setCarregandoReservas] = useState(false)
-  const [trocaDestino, setTrocaDestino] = useState<ReservaOutroProjeto | null>(null)
+  const [trocaOrigemEscolhida, setTrocaOrigemEscolhida] = useState<ReservaOutroProjeto | null>(
+    null,
+  )
   const [trocaQuantidade, setTrocaQuantidade] = useState('')
   const [trocaMotivo, setTrocaMotivo] = useState('')
   const [trocando, setTrocando] = useState(false)
@@ -612,13 +620,15 @@ export default function SeparacaoParcialPage() {
     }
   }
 
-  // SPEC-098: abre o modal de troca pra um item específico e carrega, na
-  // hora, quem mais tem essa mesma peça reservada (painel "Reservado por
+  // SPEC-098 + SPEC-149: abre o modal de troca a partir da venda que
+  // PRECISA da peça (tem `q_entrega_futura > 0`) e carrega, na hora, quem
+  // mais tem essa mesma peça reservada (painel "Reservado por
   // Cliente/Projeto", mesma fonte de dado do card de peça do Cadastro
-  // Lucenera) — essa lista também serve de seletor de destino.
+  // Lucenera) — essa lista serve de seletor de ORIGEM (de onde puxar a
+  // peça), não mais de destino.
   const handleAbrirTroca = async (item: ItemVenda) => {
-    setTrocaAlvo(item)
-    setTrocaDestino(null)
+    setTrocaVendaAtual(item)
+    setTrocaOrigemEscolhida(null)
     setTrocaQuantidade('')
     setTrocaMotivo('')
     if (!item.produto_id) {
@@ -637,34 +647,38 @@ export default function SeparacaoParcialPage() {
   }
 
   const handleFecharTroca = () => {
-    setTrocaAlvo(null)
-    setTrocaDestino(null)
+    setTrocaVendaAtual(null)
+    setTrocaOrigemEscolhida(null)
     setTrocaQuantidade('')
     setTrocaMotivo('')
     setReservasOutras([])
   }
 
+  // SPEC-149: a venda atual (clicada) é sempre o DESTINO — recebe a peça e
+  // abate a entrega futura pendente. O projeto escolhido na lista é sempre
+  // a ORIGEM — cede a peça da própria reserva. O limite de quantidade é a
+  // reserva de quem está cedendo (origem escolhida), não da venda atual.
   const handleConfirmarTroca = async () => {
-    if (!trocaAlvo || !trocaDestino || !venda) return
+    if (!trocaVendaAtual || !trocaOrigemEscolhida || !venda) return
     const quantidade = Number(trocaQuantidade)
     if (!quantidade || quantidade <= 0) {
       toast.error('Informe uma quantidade válida.')
       return
     }
-    if (quantidade > trocaAlvo.q_reserva) {
-      toast.error('Quantidade maior que a reserva disponível para troca.')
+    if (quantidade > trocaOrigemEscolhida.qReserva) {
+      toast.error('Quantidade maior que a reserva disponível do projeto escolhido.')
       return
     }
     setTrocando(true)
     try {
       await trocarReserva({
-        origemProjetoItemId: trocaAlvo.projeto_item_id,
-        destinoProjetoItemId: trocaDestino.projetoItemId,
+        origemProjetoItemId: trocaOrigemEscolhida.projetoItemId,
+        destinoProjetoItemId: trocaVendaAtual.projeto_item_id,
         quantidade,
         motivo: trocaMotivo.trim() || undefined,
       })
       toast.success(
-        `${quantidade} unidade(s) trocada(s) para ${trocaDestino.projetoCodigo || trocaDestino.orcamentoNumero || 'o outro projeto'}.`,
+        `${quantidade} unidade(s) trocada(s) de ${trocaOrigemEscolhida.projetoCodigo || trocaOrigemEscolhida.orcamentoNumero || 'outro projeto'} para esta venda.`,
       )
       const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero)
       setVenda(vendaAtualizada)
@@ -921,11 +935,14 @@ export default function SeparacaoParcialPage() {
                         </TableCell>
                         {podeTrocar && (
                           <TableCell className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
-                            {item.q_reserva > 0 && (
+                            {/* SPEC-149: o botão parte de quem PRECISA da
+                                peça (saldo pendente em Entrega Futura), não
+                                mais de quem já tem a reserva. */}
+                            {item.q_entrega_futura > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                title="Trocar peça reservada com outro projeto"
+                                title="Trocar: puxar peça reservada de outro projeto para esta venda"
                                 onClick={() => handleAbrirTroca(item)}
                               >
                                 <ArrowLeftRight className="w-4 h-4 mr-1" />
@@ -1147,24 +1164,28 @@ export default function SeparacaoParcialPage() {
         </DialogContent>
       </Dialog>
 
-      {/* SPEC-098: modal de troca — a lista "Reservado por Cliente/Projeto"
-          (mesma informação do card de peça do Cadastro Lucenera) funciona
-          como seletor de destino: escolhe a linha, informa quantidade e
-          motivo, confirma. */}
-      <Dialog open={!!trocaAlvo} onOpenChange={(open) => !open && handleFecharTroca()}>
+      {/* SPEC-098 + SPEC-149: modal de troca — parte da venda atual (que
+          precisa da peça, destino) e a lista "Reservado por
+          Cliente/Projeto" (mesma informação do card de peça do Cadastro
+          Lucenera) funciona como seletor de ORIGEM: escolhe de qual outro
+          projeto puxar, informa quantidade e motivo, confirma. */}
+      <Dialog open={!!trocaVendaAtual} onOpenChange={(open) => !open && handleFecharTroca()}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Trocar peça reservada</DialogTitle>
           </DialogHeader>
-          {trocaAlvo && (
+          {trocaVendaAtual && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
                 <span className="font-medium text-foreground">
-                  {trocaAlvo.codigo ?? '-'} — {trocaAlvo.descricao || 'Item sem descrição'}
+                  {trocaVendaAtual.codigo ?? '-'} —{' '}
+                  {trocaVendaAtual.descricao || 'Item sem descrição'}
                 </span>
                 <br />
-                Reserva disponível para troca:{' '}
-                <span className="font-semibold text-emerald-700">{trocaAlvo.q_reserva}</span>
+                Falta atender nesta venda:{' '}
+                <span className="font-semibold text-amber-700">
+                  {trocaVendaAtual.q_entrega_futura}
+                </span>
               </p>
 
               <div>
@@ -1195,9 +1216,9 @@ export default function SeparacaoParcialPage() {
                         {reservasOutras.map((r) => (
                           <TableRow
                             key={r.projetoItemId}
-                            onClick={() => setTrocaDestino(r)}
+                            onClick={() => setTrocaOrigemEscolhida(r)}
                             className={`cursor-pointer hover:bg-primary/5 ${
-                              trocaDestino?.projetoItemId === r.projetoItemId
+                              trocaOrigemEscolhida?.projetoItemId === r.projetoItemId
                                 ? 'bg-primary/10'
                                 : ''
                             }`}
@@ -1218,13 +1239,13 @@ export default function SeparacaoParcialPage() {
                 )}
               </div>
 
-              {trocaDestino && (
+              {trocaOrigemEscolhida && (
                 <div className="space-y-3 border-t pt-4">
                   <p className="text-sm">
-                    Destino selecionado:{' '}
+                    Puxar de:{' '}
                     <span className="font-semibold">
-                      {trocaDestino.projetoCodigo || trocaDestino.orcamentoNumero} —{' '}
-                      {trocaDestino.clienteNome || 'Cliente não identificado'}
+                      {trocaOrigemEscolhida.projetoCodigo || trocaOrigemEscolhida.orcamentoNumero}{' '}
+                      — {trocaOrigemEscolhida.clienteNome || 'Cliente não identificado'}
                     </span>
                   </p>
                   <div className="flex flex-wrap items-end gap-3">
@@ -1235,7 +1256,7 @@ export default function SeparacaoParcialPage() {
                       <Input
                         type="number"
                         min={1}
-                        max={trocaAlvo.q_reserva}
+                        max={trocaOrigemEscolhida.qReserva}
                         value={trocaQuantidade}
                         onChange={(e) => setTrocaQuantidade(e.target.value)}
                         className="w-28 h-9"
@@ -1264,7 +1285,7 @@ export default function SeparacaoParcialPage() {
             </Button>
             <Button
               onClick={handleConfirmarTroca}
-              disabled={trocando || !trocaDestino || !trocaQuantidade}
+              disabled={trocando || !trocaOrigemEscolhida || !trocaQuantidade}
             >
               {trocando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Confirmar troca
