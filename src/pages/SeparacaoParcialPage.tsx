@@ -732,7 +732,11 @@ export default function SeparacaoParcialPage() {
         </div>
       </header>
 
-      <main className="flex-1 p-4 sm:p-6 flex flex-col gap-4 w-full">
+      {/* pr-16/sm:pr-20 (2026-09-16): reserva espaço pro SystemSwitcher
+          (SPEC-120), fixo na borda direita — sem isso o card de busca de
+          venda e a tabela de itens (coluna "Trocar", sticky right-0)
+          esticavam até embaixo do menu. */}
+      <main className="flex-1 p-4 sm:p-6 pr-16 sm:pr-20 flex flex-col gap-4 w-full">
         {!venda ? (
           <div className="bg-card border rounded-xl p-4">
             <label className="text-xs font-semibold uppercase text-muted-foreground">
