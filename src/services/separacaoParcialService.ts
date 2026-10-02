@@ -61,6 +61,10 @@ export interface VendaDisponivel {
   vendaNumero: string | null
   clienteNome: string | null
   projetoCodigo: string | null
+  // SPEC-176: só exibição na listagem (sem valor em dinheiro — SPEC-072).
+  empresaNome: string | null
+  dataVenda: string | null
+  previsaoEntrega: string | null
 }
 
 // SPEC-072: a busca original exigia o usuário já saber o número exato da
@@ -107,9 +111,21 @@ export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
 
   const clienteMap = new Map((clientes || []).map((c: any) => [c.id, c]))
 
+  // SPEC-176: empresa da venda, data da venda (aprovação do cliente; se
+  // vazia, emissão do orçamento) e previsão de entrega.
+  const orcamentoIds = [...new Set([...porVenda.values()].map((v) => v.orcamento_id))]
+  const { data: orcamentos, error: orcamentoError } = await supabase
+    .from('orcamentos')
+    .select('id, aprovado_cliente_em, data_emissao, previsao_entrega, empresa:empresas(nome)')
+    .in('id', orcamentoIds)
+  if (orcamentoError) throw orcamentoError
+
+  const orcamentoMap = new Map((orcamentos || []).map((o: any) => [o.id, o]))
+
   return Array.from(porVenda.entries())
     .map(([numero, v]) => {
       const cliente = v.cliente_id ? clienteMap.get(v.cliente_id) : null
+      const orcamento: any = orcamentoMap.get(v.orcamento_id)
       const clienteNome = cliente
         ? cliente.razao_social?.trim() && cliente.razao_social !== cliente.nome
           ? `${cliente.razao_social} - ${cliente.nome}`
@@ -121,6 +137,9 @@ export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
         vendaNumero: v.venda_numero,
         clienteNome,
         projetoCodigo: v.projeto_codigo,
+        empresaNome: orcamento?.empresa?.nome ?? null,
+        dataVenda: orcamento?.aprovado_cliente_em || orcamento?.data_emissao || null,
+        previsaoEntrega: orcamento?.previsao_entrega ?? null,
       }
     })
     .sort((a, b) => a.orcamentoNumero.localeCompare(b.orcamentoNumero))

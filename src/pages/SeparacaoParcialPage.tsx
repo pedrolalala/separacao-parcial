@@ -72,6 +72,18 @@ const fmtDataHora = (iso: string) =>
 
 const fmtDataCurta = (iso: string | null) => (iso ? fmtData(iso) : '-')
 
+// SPEC-176: coluna `date` (ex.: previsao_entrega) chega como "AAAA-MM-DD";
+// new Date() leria como meia-noite UTC e mostraria o dia anterior no Brasil.
+const fmtDia = (v: string | null) => {
+  if (!v) return '-'
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v)
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(v)
+}
+
+// SPEC-176: na listagem o número aparece sem o prefixo ("VENDA-0001" → "0001");
+// o dado gravado e a busca continuam com o número completo.
+const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
+
 // SPEC-091 + SPEC-093: gera e já abre o diálogo de impressão (o usuário
 // escolhe "Salvar como PDF" ou imprimir direto) assim que uma separação é
 // confirmada — sem precisar de biblioteca de PDF nova nem Edge Function,
@@ -94,7 +106,6 @@ function imprimirListaSeparacao(params: {
     classificacao: string | null
     quantidade: number
   }[]
-  responsavelNome: string
 }) {
   const janela = window.open('', '_blank', 'width=800,height=900')
   if (!janela) return
@@ -102,28 +113,37 @@ function imprimirListaSeparacao(params: {
   const { venda } = params
 
   // SPEC-138 (Prompt 6): localizador "L" (mesmo dado da coluna
-  // "Classificação" em tela, vindo de projeto_itens.l_fixo), coluna de
-  // marcação em branco pra conferência física, totalizador no rodapé e
-  // campo de observações — pra alinhar a lista impressa com o que a
-  // equipe de expedição já pedia pra marcar nas caixas.
+  // "Classificação" em tela, vindo de projeto_itens.l_fixo), totalizador no
+  // rodapé e campo de observações.
+  // SPEC-176: logo no cabeçalho, sem a coluna "Conf.", referência + descrição
+  // numa linha só (cortada com reticências, texto completo no title), Cód.
+  // Ref. e Quantidade centralizados, e rodapé só com Entregador e Recebedor.
   const totalItens = params.itensSeparados.length
   const totalPecas = params.itensSeparados.reduce((soma, i) => soma + i.quantidade, 0)
 
+  const esc = (v: unknown) =>
+    String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+
   const linhas = params.itensSeparados
-    .map(
-      (i) => `
+    .map((i) => {
+      const refDesc = [i.referencia, i.descricao].filter(Boolean).join(' — ') || '-'
+      return `
         <tr>
-          <td class="marcar">&#9633;</td>
-          <td>${i.classificacao || '-'}</td>
-          <td>${i.codigo ?? '-'}</td>
-          <td>${i.referencia || '-'}</td>
-          <td>${i.descricao || '-'}</td>
-          <td style="text-align:right">${i.quantidade}</td>
-        </tr>`,
-    )
+          <td class="centro">${esc(i.classificacao || '-')}</td>
+          <td class="centro">${esc(i.codigo ?? '-')}</td>
+          <td class="linha-unica" title="${esc(refDesc)}">${esc(refDesc)}</td>
+          <td class="centro">${i.quantidade}</td>
+        </tr>`
+    })
     .join('')
 
-  const numeroPedido = `${venda.orcamentoNumero}-P${params.numeroSeparacao} / ${venda.vendaNumero || '-'}`
+  // SPEC-176: só o número da venda (sem prefixo) + a parcial, ex.: "0001-P3".
+  // Venda sem número (aprovada antes da SPEC-136) cai no número do orçamento.
+  const numeroPedido = `${semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P${params.numeroSeparacao}`
   const endereco = venda.clienteEndereco
     ? `${venda.clienteEndereco}${venda.clienteNumero ? ', ' + venda.clienteNumero : ''}`
     : '-'
@@ -131,70 +151,76 @@ function imprimirListaSeparacao(params: {
     ? `${venda.clienteCidade}${venda.clienteEstado ? '-' + venda.clienteEstado : ''}`
     : '-'
 
+  const assinatura = (papel: string) => `
+    <div class="assinatura">
+      <div class="papel">${papel}</div>
+      <div class="campo"><span>Nome</span></div>
+      <div class="campo"><span>RG/CPF</span></div>
+      <div class="campo"><span>Data/Hora</span></div>
+    </div>`
+
   janela.document.write(`
     <html>
       <head>
         <meta charset="utf-8" />
-        <title>Pedido em Separação ${numeroPedido}</title>
+        <title>Pedido em Separação ${esc(numeroPedido)}</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 24px; color: #111; font-size: 12px; }
-          .cabecalho { display: flex; justify-content: space-between; align-items: flex-start; }
-          .cabecalho .num { font-weight: bold; font-size: 13px; }
-          .cabecalho .titulo { text-align: center; font-weight: bold; font-size: 14px; flex: 1; }
-          .cabecalho .impressao { text-align: right; color: #555; }
-          .empresa-linha { display: flex; justify-content: space-between; margin-top: 6px; }
-          .empresa-linha .empresa { font-weight: bold; font-size: 13px; }
-          .empresa-linha .datas { text-align: right; }
-          .dados-cliente { margin-top: 10px; border-top: 1px solid #999; border-bottom: 1px solid #999; padding: 6px 0; }
-          .dados-cliente .linha { display: flex; justify-content: space-between; gap: 16px; }
-          .dados-cliente .linha span:first-child { white-space: nowrap; }
-          table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 14px; }
+          @page { margin: 14mm; }
+          body { font-family: Arial, sans-serif; margin: 0; color: #111; font-size: 12px; }
+          .cabecalho { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding-bottom: 10px; border-bottom: 2px solid #111; }
+          .cabecalho img { height: 56px; width: auto; }
+          .cabecalho .titulo { text-align: center; }
+          .cabecalho .titulo h1 { font-size: 15px; margin: 0; letter-spacing: 0.5px; }
+          .cabecalho .titulo .num { font-size: 13px; font-weight: bold; margin-top: 4px; }
+          .cabecalho .datas { text-align: right; font-size: 11px; line-height: 1.6; color: #333; }
+          .empresa { margin-top: 10px; font-weight: bold; font-size: 13px; }
+          .dados-cliente { margin-top: 8px; display: grid; grid-template-columns: 2fr 1fr; gap: 4px 24px; padding: 8px 10px; border: 1px solid #ccc; border-radius: 4px; }
+          .dados-cliente .rotulo { color: #666; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px; margin-top: 14px; }
           th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
-          th { background: #f3f3f3; }
-          td.marcar { text-align: center; font-size: 16px; width: 28px; }
+          th { background: #f3f3f3; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
+          th.centro, td.centro { text-align: center; }
+          td.linha-unica { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
           tfoot td { font-weight: bold; background: #f9f9f9; }
-          .observacoes { margin-top: 20px; font-size: 12px; }
-          .observacoes .linha { border-bottom: 1px solid #999; height: 22px; margin-top: 10px; }
-          .assinaturas { margin-top: 36px; }
-          .assinaturas .bloco { display: flex; justify-content: space-around; margin-top: 30px; text-align: center; font-size: 11px; }
-          .assinaturas .bloco div { border-top: 1px solid #333; padding-top: 4px; width: 200px; }
-          .declaracao { margin-top: 24px; font-size: 10px; font-style: italic; text-align: center; }
+          .observacoes { margin-top: 18px; }
+          .observacoes .linha { border-bottom: 1px solid #999; height: 22px; margin-top: 8px; }
+          .assinaturas { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+          .assinatura .papel { font-weight: bold; font-size: 12px; text-transform: uppercase; border-top: 1px solid #111; padding-top: 4px; text-align: center; }
+          .assinatura .campo { margin-top: 18px; border-bottom: 1px solid #999; height: 16px; font-size: 10px; color: #666; }
         </style>
       </head>
       <body>
         <div class="cabecalho">
-          <div class="num">${numeroPedido}</div>
-          <div class="titulo">PEDIDO EM SEPARAÇÃO - VENDAS - VENDAS</div>
-          <div class="impressao">Impressão: ${new Date().toLocaleString('pt-BR')}</div>
-        </div>
-        <div class="empresa-linha">
-          <div class="empresa">${venda.empresaNome || 'LUCENERA'}</div>
+          <div><img src="${LOGO_URL}" alt="Lucenera" /></div>
+          <div class="titulo">
+            <h1>PEDIDO EM SEPARAÇÃO</h1>
+            <div class="num">Venda ${esc(numeroPedido)}</div>
+          </div>
           <div class="datas">
+            Impressão: ${new Date().toLocaleString('pt-BR')}<br />
             Data orçamento: ${fmtDataCurta(venda.dataEmissaoOrcamento)}<br />
-            Previsão de Entrega: ${params.dataEntregaInformada ? fmtDataCurta(params.dataEntregaInformada) : 'A combinar'}
+            Previsão de entrega: ${params.dataEntregaInformada ? fmtDataCurta(params.dataEntregaInformada) : 'A combinar'}
           </div>
         </div>
+        <div class="empresa">${esc(venda.empresaNome || 'LUCENERA')}</div>
         <div class="dados-cliente">
-          <div class="linha">
-            <span>Nome.....: ${venda.clienteCpfCnpj || '-'} ${venda.projetoCodigo || '-'} ${venda.clienteNome || '-'}</span>
-            <span>Telefone: ${venda.clienteTelefone || '-'}</span>
-          </div>
-          <div class="linha">
-            <span>Endereco.: ${endereco}</span>
-            <span>Bairro: ${venda.clienteBairro || '-'}</span>
-          </div>
-          <div class="linha">
-            <span>Cidade...: ${cidadeEstado}</span>
-            <span>Vendedor: ${venda.vendedorNome || '-'}</span>
-          </div>
+          <div><span class="rotulo">Cliente:</span> ${esc(venda.clienteNome || '-')}${venda.clienteCpfCnpj ? ' · ' + esc(venda.clienteCpfCnpj) : ''}</div>
+          <div><span class="rotulo">Projeto:</span> ${esc(venda.projetoCodigo || '-')}</div>
+          <div><span class="rotulo">Endereço:</span> ${esc(endereco)}${venda.clienteBairro ? ' - ' + esc(venda.clienteBairro) : ''}</div>
+          <div><span class="rotulo">Telefone:</span> ${esc(venda.clienteTelefone || '-')}</div>
+          <div><span class="rotulo">Cidade:</span> ${esc(cidadeEstado)}</div>
+          <div><span class="rotulo">Vendedor:</span> ${esc(venda.vendedorNome || '-')}</div>
         </div>
         <table>
+          <colgroup>
+            <col style="width:12%" /><col style="width:13%" /><col /><col style="width:13%" />
+          </colgroup>
           <thead>
-            <tr><th>Conf.</th><th>Local (L)</th><th>Código</th><th>Referência</th><th>Descrição</th><th>Qtd.</th></tr>
+            <tr><th class="centro">Local (L)</th><th class="centro">Cód. Ref.</th><th>Referência / Descrição</th><th class="centro">Quantidade</th></tr>
           </thead>
           <tbody>${linhas}</tbody>
           <tfoot>
-            <tr><td colspan="5">Total de itens: ${totalItens}</td><td style="text-align:right">${totalPecas}</td></tr>
+            <tr><td colspan="3">Total de itens: ${totalItens}</td><td class="centro">${totalPecas}</td></tr>
           </tfoot>
         </table>
         <div class="observacoes">
@@ -204,29 +230,25 @@ function imprimirListaSeparacao(params: {
           <div class="linha"></div>
         </div>
         <div class="assinaturas">
-          <div class="bloco">
-            <div>Conferido: Ass. Conferente</div>
-            <div>Data/Hora</div>
-          </div>
-          <div class="declaracao">
-            ASSUMO TOTAL RESPONSABILIDADE PELAS MERCADORIAS CORRESPONDENTES A ESTA ENTREGA,
-            BEM COMO DECLARO CORRETO O CONTEÚDO E QUANTIDADES MENCIONADAS ACIMA.
-          </div>
-          <div class="bloco">
-            <div>Conferido: Ass. Conferente</div>
-            <div>RG/CPF</div>
-            <div>Data/Hora</div>
-          </div>
-        </div>
-        <div class="observacoes" style="margin-top:16px; color:#777;">
-          Separado por: ${params.responsavelNome}
+          ${assinatura('Entregador')}
+          ${assinatura('Recebedor')}
         </div>
       </body>
     </html>
   `)
   janela.document.close()
-  janela.focus()
-  janela.print()
+  // Espera a logo carregar para ela não sair em branco na impressão.
+  const imprimir = () => {
+    janela.focus()
+    janela.print()
+  }
+  const logo = janela.document.querySelector('img')
+  if (logo && !logo.complete) {
+    logo.onload = imprimir
+    logo.onerror = imprimir
+  } else {
+    imprimir()
+  }
 }
 
 export default function SeparacaoParcialPage() {
@@ -315,7 +337,8 @@ export default function SeparacaoParcialPage() {
         v.orcamentoNumero.toLowerCase().includes(termo) ||
         (v.vendaNumero || '').toLowerCase().includes(termo) ||
         (v.clienteNome || '').toLowerCase().includes(termo) ||
-        (v.projetoCodigo || '').toLowerCase().includes(termo),
+        (v.projetoCodigo || '').toLowerCase().includes(termo) ||
+        (v.empresaNome || '').toLowerCase().includes(termo),
     )
   }, [vendasDisponiveis, filtro])
 
@@ -456,7 +479,6 @@ export default function SeparacaoParcialPage() {
             quantidade: i.quantidade,
           }
         }),
-        responsavelNome: user?.email || 'Não identificado',
       })
 
       const [vendaAtualizada, historico] = await Promise.all([
@@ -747,7 +769,7 @@ export default function SeparacaoParcialPage() {
               <Input
                 value={filtro}
                 onChange={(e) => setFiltro(e.target.value)}
-                placeholder="Filtrar por número da venda ou cliente..."
+                placeholder="Filtrar por número da venda, cliente, projeto ou empresa..."
                 className="pl-9"
                 disabled={carregandoVendas}
               />
@@ -768,13 +790,13 @@ export default function SeparacaoParcialPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      {/* Pedido do usuário (2026-09-14): Venda antes de
-                          Orçamento — antes o número da venda ficava
-                          escondido depois do orçamento. */}
+                      {/* SPEC-176: sem a coluna do orçamento; cliente e
+                          projeto na mesma linha; empresa e datas da venda. */}
                       <TableHead>Venda</TableHead>
-                      <TableHead>Orçamento</TableHead>
-                      <TableHead>Cliente</TableHead>
-                      <TableHead>Projeto</TableHead>
+                      <TableHead>Cliente — Projeto</TableHead>
+                      <TableHead>Empresa</TableHead>
+                      <TableHead className="text-center">Data da Venda</TableHead>
+                      <TableHead className="text-center">Previsão de Entrega</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -788,15 +810,17 @@ export default function SeparacaoParcialPage() {
                             cor escura + semibold + leve letter-spacing, pra
                             leitura rápida em tela de gestão. */}
                         <TableCell className="font-semibold text-[#333333] tracking-wide text-sm">
-                          {v.vendaNumero || '—'}
+                          {semPrefixo(v.vendaNumero) || '—'}
                         </TableCell>
-                        <TableCell className="text-sm">{v.orcamentoNumero}</TableCell>
-                        <TableCell className="text-sm">
+                        <TableCell className="text-sm whitespace-nowrap">
                           {v.clienteNome || 'Cliente não identificado'}
+                          {v.projetoCodigo && (
+                            <span className="text-muted-foreground"> — {v.projetoCodigo}</span>
+                          )}
                         </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {v.projetoCodigo || '-'}
-                        </TableCell>
+                        <TableCell className="text-sm">{v.empresaNome || '-'}</TableCell>
+                        <TableCell className="text-sm text-center">{fmtDataCurta(v.dataVenda)}</TableCell>
+                        <TableCell className="text-sm text-center">{fmtDia(v.previsaoEntrega)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -812,14 +836,11 @@ export default function SeparacaoParcialPage() {
             </Button>
             <div className="flex-1 min-w-[240px] flex flex-wrap gap-x-6 gap-y-1 text-sm">
               <div>
-                <span className="text-muted-foreground">Orçamento: </span>
-                <span className="font-medium">{venda.orcamentoNumero}</span>
-              </div>
-              <div>
                 {/* SPEC-136: número da venda é distinto do orçamento de
-                origem — null em orçamentos aprovados antes desta SPEC. */}
+                origem — null em orçamentos aprovados antes desta SPEC.
+                SPEC-176: só a venda, sem prefixo e sem o orçamento. */}
                 <span className="text-muted-foreground">Venda: </span>
-                <span className="font-medium">{venda.vendaNumero || '—'}</span>
+                <span className="font-medium">{semPrefixo(venda.vendaNumero) || '—'}</span>
               </div>
               <div>
                 <span className="text-muted-foreground">Cliente: </span>
@@ -1046,7 +1067,7 @@ export default function SeparacaoParcialPage() {
                     {parciais.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell className="font-mono text-xs">
-                          {venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
+                          {semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
                         </TableCell>
                         <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
                         <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
