@@ -574,6 +574,57 @@ export interface LogTroca {
 // apontam pra auth.users (não pra public.usuarios diretamente), por isso a
 // busca de nome é uma query separada, mesmo padrão já usado neste arquivo
 // para nomes de cliente.
+// SPEC-180: devolução de material ENTREGUE fica "aguardando recebimento" até a
+// peça chegar fisicamente; quem recebe confirma aqui e só então o estoque
+// disponível do produto sobe (RPC confirmar_recebimento_devolucao).
+export interface DevolucaoAReceber {
+  id: string
+  criadoEm: string
+  quantidade: number
+  motivo: string | null
+  produto: string | null
+  codigoProduto: number | null
+  referencia: string | null
+  local: string | null
+  numeroVenda: string | null
+  empresa: string | null
+  cliente: string | null
+  projetoCodigo: string | null
+}
+
+export async function listarDevolucoesAReceber(): Promise<DevolucaoAReceber[]> {
+  const { data, error } = await (supabase as any)
+    .from('vw_devolucoes_aguardando_recebimento')
+    .select('*')
+    .order('criado_em', { ascending: true })
+  if (error) throw error
+  return (data || []).map((d: any) => ({
+    id: d.id,
+    criadoEm: d.criado_em,
+    quantidade: Number(d.quantidade) || 0,
+    motivo: d.motivo,
+    produto: d.produto,
+    codigoProduto: d.codigo_produto,
+    referencia: d.referencia,
+    local: d.l_fixo,
+    numeroVenda: d.numero_venda,
+    empresa: d.empresa,
+    cliente: d.cliente,
+    projetoCodigo: d.projeto_codigo,
+  }))
+}
+
+export async function confirmarRecebimentoDevolucao(
+  devolucaoId: string,
+  observacao?: string,
+): Promise<void> {
+  const { error } = await (supabase as any).rpc('confirmar_recebimento_devolucao', {
+    p_devolucao_id: devolucaoId,
+    p_observacao: observacao?.trim() || null,
+  })
+  if (error) throw error
+}
+
 export async function listarLogTrocas(): Promise<LogTroca[]> {
   const { data: transf, error } = await supabase
     .from('transferencias_estoque')
@@ -640,3 +691,4 @@ export async function listarLogTrocas(): Promise<LogTroca[]> {
     }
   })
 }
+

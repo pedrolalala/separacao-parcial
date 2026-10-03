@@ -11,6 +11,7 @@ import {
   ArrowLeftRight,
   ScrollText,
   Users,
+  PackageCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -44,6 +45,9 @@ import {
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
+  listarDevolucoesAReceber,
+  confirmarRecebimentoDevolucao,
+  type DevolucaoAReceber,
   listarItensDaParcial,
   estornarItemSeparacao,
   type VendaInfo,
@@ -199,7 +203,7 @@ function imprimirListaSeparacao(params: {
           <div class="datas">
             Impressão: ${new Date().toLocaleString('pt-BR')}<br />
             Data orçamento: ${fmtDataCurta(venda.dataEmissaoOrcamento)}<br />
-            Previsão de entrega: ${params.dataEntregaInformada ? fmtDataCurta(params.dataEntregaInformada) : 'A combinar'}
+            Previsão de entrega: ${params.dataEntregaInformada ? fmtDia(params.dataEntregaInformada) : 'A combinar'}
           </div>
         </div>
         <div class="empresa">${esc(venda.empresaNome || 'LUCENERA')}</div>
@@ -309,6 +313,12 @@ export default function SeparacaoParcialPage() {
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
+  // SPEC-180: devoluções de material entregue aguardando a peça voltar.
+  const [devolucoesAbertas, setDevolucoesAbertas] = useState(false)
+  const [devolucoesAReceber, setDevolucoesAReceber] = useState<DevolucaoAReceber[]>([])
+  const [carregandoDevolucoes, setCarregandoDevolucoes] = useState(false)
+  const [recebendoId, setRecebendoId] = useState<string | null>(null)
+  const [obsRecebimento, setObsRecebimento] = useState<Record<string, string>>({})
 
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
@@ -727,6 +737,36 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-180: lista e confirma o recebimento físico das devoluções de material
+  // já entregue ao cliente. O estoque só sobe depois da confirmação.
+  const carregarDevolucoesAReceber = async () => {
+    setCarregandoDevolucoes(true)
+    try {
+      setDevolucoesAReceber(await listarDevolucoesAReceber())
+    } catch (err: any) {
+      toast.error('Erro ao carregar devoluções a receber', { description: err?.message })
+    } finally {
+      setCarregandoDevolucoes(false)
+    }
+  }
+
+  useEffect(() => {
+    carregarDevolucoesAReceber()
+  }, [])
+
+  const handleConfirmarRecebimento = async (d: DevolucaoAReceber) => {
+    setRecebendoId(d.id)
+    try {
+      await confirmarRecebimentoDevolucao(d.id, obsRecebimento[d.id])
+      toast.success(`Recebimento confirmado: ${d.quantidade} un. de ${d.produto || 'peça'} voltaram ao estoque.`)
+      await carregarDevolucoesAReceber()
+    } catch (err: any) {
+      toast.error('Não foi possível confirmar o recebimento', { description: err?.message })
+    } finally {
+      setRecebendoId(null)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">
       <header className="sticky top-0 z-10 bg-card border-b px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
@@ -736,6 +776,22 @@ export default function SeparacaoParcialPage() {
           <h1 className="font-bold text-lg hidden sm:block">Separação Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setDevolucoesAbertas(true)
+              carregarDevolucoesAReceber()
+            }}
+          >
+            <PackageCheck className="w-4 h-4 mr-2" />
+            Devoluções a receber
+            {devolucoesAReceber.length > 0 && (
+              <Badge className="ml-2 h-5 px-1.5 bg-amber-500 hover:bg-amber-500">
+                {devolucoesAReceber.length}
+              </Badge>
+            )}
+          </Button>
           {podeTrocar && (
             <Button variant="outline" size="sm" onClick={handleAbrirLog}>
               <ScrollText className="w-4 h-4 mr-2" />
@@ -1316,6 +1372,97 @@ export default function SeparacaoParcialPage() {
               Confirmar troca
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-180: devoluções aprovadas de material ENTREGUE, aguardando a
+          peça chegar. Confirmar = a peça voltou para a prateleira. */}
+      <Dialog open={devolucoesAbertas} onOpenChange={setDevolucoesAbertas}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>Devoluções aguardando recebimento</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-2">
+            Material que já estava com o cliente e foi devolvido. Confirme quando a peça
+            chegar — só então ela volta ao estoque disponível.
+          </p>
+          {carregandoDevolucoes ? (
+            <div className="flex items-center justify-center py-10">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : devolucoesAReceber.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-10">
+              Nenhuma devolução aguardando recebimento.
+            </p>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto border rounded-lg">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>L</TableHead>
+                    <TableHead>Peça</TableHead>
+                    <TableHead>Venda</TableHead>
+                    <TableHead>Cliente — Projeto</TableHead>
+                    <TableHead className="text-center">Qtd.</TableHead>
+                    <TableHead>Devolvida em</TableHead>
+                    <TableHead className="w-64">Recebimento</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {devolucoesAReceber.map((d) => (
+                    <TableRow key={d.id}>
+                      <TableCell className="font-mono text-sm">{d.local || '-'}</TableCell>
+                      <TableCell className="text-sm">
+                        <span className="font-mono font-semibold text-[#333333] tracking-wide">
+                          {d.codigoProduto ?? '-'}
+                        </span>
+                        {d.referencia ? ` · ${d.referencia}` : ''}
+                        <br />
+                        <span className="text-xs text-muted-foreground">{d.produto || '-'}</span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {semPrefixo(d.numeroVenda) || '-'}
+                        <br />
+                        <span className="text-xs text-muted-foreground">{d.empresa || '-'}</span>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {d.cliente || '-'}
+                        {d.projetoCodigo && (
+                          <span className="text-muted-foreground"> — {d.projetoCodigo}</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-center text-sm font-semibold">{d.quantidade}</TableCell>
+                      <TableCell className="text-sm whitespace-nowrap">{fmtDataHora(d.criadoEm)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1.5">
+                          <Input
+                            placeholder="Observação (opcional)"
+                            value={obsRecebimento[d.id] || ''}
+                            onChange={(e) =>
+                              setObsRecebimento((o) => ({ ...o, [d.id]: e.target.value }))
+                            }
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            size="sm"
+                            onClick={() => handleConfirmarRecebimento(d)}
+                            disabled={recebendoId === d.id}
+                          >
+                            {recebendoId === d.id ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <PackageCheck className="w-4 h-4 mr-2" />
+                            )}
+                            Confirmar recebimento
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
