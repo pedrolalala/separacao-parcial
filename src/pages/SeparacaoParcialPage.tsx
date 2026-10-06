@@ -237,7 +237,7 @@ function imprimirListaSeparacao(params: {
             <col style="width:9%" /><col style="width:9%" /><col style="width:18%" /><col /><col style="width:8%" />
           </colgroup>
           <thead>
-            <tr><th class="centro">L</th><th class="centro">Cód.</th><th>Ref.</th><th>Descrição</th><th class="centro">Quant.</th></tr>
+            <tr><th class="centro">ID</th><th class="centro">Cód.</th><th>Ref.</th><th>Descrição</th><th class="centro">Quant.</th></tr>
           </thead>
           <tbody>${linhas}</tbody>
           <tfoot>
