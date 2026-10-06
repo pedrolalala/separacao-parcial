@@ -11,7 +11,8 @@ import {
   ArrowLeftRight,
   ScrollText,
   Users,
-  PackageCheck,
+  Eye,
+  Printer,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,9 +46,6 @@ import {
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
-  listarDevolucoesAReceber,
-  confirmarRecebimentoDevolucao,
-  type DevolucaoAReceber,
   listarItensDaParcial,
   estornarItemSeparacao,
   type VendaInfo,
@@ -304,21 +302,17 @@ export default function SeparacaoParcialPage() {
   const [trocaVendaAtual, setTrocaVendaAtual] = useState<ItemVenda | null>(null)
   const [reservasOutras, setReservasOutras] = useState<ReservaOutroProjeto[]>([])
   const [carregandoReservas, setCarregandoReservas] = useState(false)
-  const [trocaOrigemEscolhida, setTrocaOrigemEscolhida] = useState<ReservaOutroProjeto | null>(
-    null,
-  )
+  const [trocaOrigemEscolhida, setTrocaOrigemEscolhida] = useState<ReservaOutroProjeto | null>(null)
   const [trocaQuantidade, setTrocaQuantidade] = useState('')
   const [trocaMotivo, setTrocaMotivo] = useState('')
   const [trocando, setTrocando] = useState(false)
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
-  // SPEC-180: devoluções de material entregue aguardando a peça voltar.
-  const [devolucoesAbertas, setDevolucoesAbertas] = useState(false)
-  const [devolucoesAReceber, setDevolucoesAReceber] = useState<DevolucaoAReceber[]>([])
-  const [carregandoDevolucoes, setCarregandoDevolucoes] = useState(false)
-  const [recebendoId, setRecebendoId] = useState<string | null>(null)
-  const [obsRecebimento, setObsRecebimento] = useState<Record<string, string>>({})
+  // SPEC-182 (S1): ver o que foi em cada parcial (e reimprimir).
+  const [verParcial, setVerParcial] = useState<ParcialHistorico | null>(null)
+  const [verItens, setVerItens] = useState<ItemParcial[]>([])
+  const [carregandoVer, setCarregandoVer] = useState(false)
 
   // SPEC-072: antes disso o campo "Venda" era texto livre sem nenhuma forma
   // de descobrir quais números existem — carrega as vendas com saldo
@@ -572,6 +566,50 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-182 (S1): itens de uma parcial — quanto foi separado de cada peça e
+  // quanto já foi estornado; a mesma lista alimenta a reimpressão.
+  const handleVerParcial = async (parcial: ParcialHistorico) => {
+    setVerParcial(parcial)
+    setVerItens([])
+    setCarregandoVer(true)
+    try {
+      setVerItens(await listarItensDaParcial(parcial.id))
+    } catch (err: any) {
+      toast.error('Erro ao carregar itens da parcial', { description: err?.message })
+    } finally {
+      setCarregandoVer(false)
+    }
+  }
+
+  const itemDaVenda = (i: ItemParcial) =>
+    venda?.itens.find((v) => v.projeto_item_id === i.projetoItemId) ?? null
+
+  const handleReimprimir = () => {
+    if (!venda || !verParcial) return
+    const itensSeparados = verItens
+      .map((i) => {
+        const original = itemDaVenda(i)
+        return {
+          descricao: i.descricao,
+          codigo: original?.codigo ?? null,
+          referencia: original?.referencia ?? null,
+          classificacao: original?.classificacao ?? null,
+          quantidade: i.quantidade - i.quantidadeEstornada,
+        }
+      })
+      .filter((i) => i.quantidade > 0)
+    if (itensSeparados.length === 0) {
+      toast.error('Esta parcial não tem peças (tudo foi estornado).')
+      return
+    }
+    imprimirListaSeparacao({
+      venda,
+      numeroSeparacao: numerosParciais.get(verParcial.id) ?? 0,
+      dataEntregaInformada: '',
+      itensSeparados,
+    })
+  }
+
   const handleFecharEstorno = () => {
     setEstornoAlvo(null)
     setEstornoObservacao('')
@@ -710,7 +748,7 @@ export default function SeparacaoParcialPage() {
         motivo: trocaMotivo.trim() || undefined,
       })
       toast.success(
-        `${quantidade} unidade(s) trocada(s) de ${trocaOrigemEscolhida.projetoCodigo || trocaOrigemEscolhida.orcamentoNumero || 'outro projeto'} para esta venda.`,
+        `${quantidade} unidade(s) trocada(s) de ${trocaOrigemEscolhida.projetoCodigo || semPrefixo(trocaOrigemEscolhida.orcamentoNumero) || 'outro projeto'} para esta venda.`,
       )
       const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero)
       setVenda(vendaAtualizada)
@@ -737,36 +775,6 @@ export default function SeparacaoParcialPage() {
     }
   }
 
-  // SPEC-180: lista e confirma o recebimento físico das devoluções de material
-  // já entregue ao cliente. O estoque só sobe depois da confirmação.
-  const carregarDevolucoesAReceber = async () => {
-    setCarregandoDevolucoes(true)
-    try {
-      setDevolucoesAReceber(await listarDevolucoesAReceber())
-    } catch (err: any) {
-      toast.error('Erro ao carregar devoluções a receber', { description: err?.message })
-    } finally {
-      setCarregandoDevolucoes(false)
-    }
-  }
-
-  useEffect(() => {
-    carregarDevolucoesAReceber()
-  }, [])
-
-  const handleConfirmarRecebimento = async (d: DevolucaoAReceber) => {
-    setRecebendoId(d.id)
-    try {
-      await confirmarRecebimentoDevolucao(d.id, obsRecebimento[d.id])
-      toast.success(`Recebimento confirmado: ${d.quantidade} un. de ${d.produto || 'peça'} voltaram ao estoque.`)
-      await carregarDevolucoesAReceber()
-    } catch (err: any) {
-      toast.error('Não foi possível confirmar o recebimento', { description: err?.message })
-    } finally {
-      setRecebendoId(null)
-    }
-  }
-
   return (
     <div className="min-h-screen bg-muted/30 flex flex-col">
       <header className="sticky top-0 z-10 bg-card border-b px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
@@ -776,22 +784,6 @@ export default function SeparacaoParcialPage() {
           <h1 className="font-bold text-lg hidden sm:block">Separação Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setDevolucoesAbertas(true)
-              carregarDevolucoesAReceber()
-            }}
-          >
-            <PackageCheck className="w-4 h-4 mr-2" />
-            Devoluções a receber
-            {devolucoesAReceber.length > 0 && (
-              <Badge className="ml-2 h-5 px-1.5 bg-amber-500 hover:bg-amber-500">
-                {devolucoesAReceber.length}
-              </Badge>
-            )}
-          </Button>
           {podeTrocar && (
             <Button variant="outline" size="sm" onClick={handleAbrirLog}>
               <ScrollText className="w-4 h-4 mr-2" />
@@ -875,8 +867,12 @@ export default function SeparacaoParcialPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-sm">{v.empresaNome || '-'}</TableCell>
-                        <TableCell className="text-sm text-center">{fmtDataCurta(v.dataVenda)}</TableCell>
-                        <TableCell className="text-sm text-center">{fmtDia(v.previsaoEntrega)}</TableCell>
+                        <TableCell className="text-sm text-center">
+                          {fmtDataCurta(v.dataVenda)}
+                        </TableCell>
+                        <TableCell className="text-sm text-center">
+                          {fmtDia(v.previsaoEntrega)}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -930,12 +926,16 @@ export default function SeparacaoParcialPage() {
                       <TableHead className="text-right whitespace-nowrap px-2">Q. Dev.</TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2">Q. Venda</TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2">E. Futura</TableHead>
-                      <TableHead className="text-right whitespace-nowrap px-2">Transferido</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">
+                        Transferido
+                      </TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2">Reserva</TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2 bg-primary/5">
                         À Separar
                       </TableHead>
-                      <TableHead className="text-right whitespace-nowrap px-2">Ag. Separar</TableHead>
+                      <TableHead className="text-right whitespace-nowrap px-2">
+                        Ag. Separar
+                      </TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2">Separado</TableHead>
                       <TableHead className="text-right whitespace-nowrap px-2">Entregue</TableHead>
                       {/* SPEC-138 (Prompt 5): coluna de ação fixa à direita
@@ -1105,10 +1105,17 @@ export default function SeparacaoParcialPage() {
                 seção abaixo é só o histórico das separações já feitas. */}
             {parciais.length > 0 && (
               <div ref={parciaisSectionRef} className="bg-card border rounded-xl p-4 scroll-mt-4">
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-1">
                   <History className="w-4 h-4 text-muted-foreground" />
                   <h2 className="font-semibold text-sm">Parciais desta venda</h2>
                 </div>
+                {/* SPEC-182 (S1/S2) */}
+                <p className="text-xs text-muted-foreground mb-3">
+                  "Ver itens" mostra o que foi separado em cada parcial e permite reimprimir a
+                  lista. "Estornar" desfaz a separação (inteira ou só algumas peças): as peças
+                  voltam para a Reserva da venda — use quando a separação foi feita por engano ou
+                  antes de uma devolução.
+                </p>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -1123,7 +1130,8 @@ export default function SeparacaoParcialPage() {
                     {parciais.map((p) => (
                       <TableRow key={p.id}>
                         <TableCell className="font-mono text-xs">
-                          {semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P{numerosParciais.get(p.id) ?? '?'}
+                          {semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P
+                          {numerosParciais.get(p.id) ?? '?'}
                         </TableCell>
                         <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
                         <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
@@ -1132,12 +1140,17 @@ export default function SeparacaoParcialPage() {
                             {p.status}
                           </Badge>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="text-right whitespace-nowrap">
+                          <Button variant="ghost" size="sm" onClick={() => handleVerParcial(p)}>
+                            <Eye className="w-4 h-4 mr-1" />
+                            Ver itens
+                          </Button>
                           {p.status !== 'Cancelado' && (
                             <Button
                               variant="ghost"
                               size="sm"
                               className="text-destructive hover:text-destructive"
+                              title="Desfaz a separação: as peças voltam para a Reserva"
                               onClick={() => handleAbrirEstorno(p)}
                             >
                               Estornar
@@ -1154,6 +1167,74 @@ export default function SeparacaoParcialPage() {
         )}
       </main>
 
+      {/* SPEC-182 (S1): o que foi separado em cada parcial + reimpressão. */}
+      <Dialog open={!!verParcial} onOpenChange={(open) => !open && setVerParcial(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>
+              Parcial {venda ? semPrefixo(venda.vendaNumero) || venda.orcamentoNumero : ''}-P
+              {verParcial ? (numerosParciais.get(verParcial.id) ?? '?') : ''}
+            </DialogTitle>
+          </DialogHeader>
+          {verParcial && (
+            <p className="text-sm text-muted-foreground">
+              {fmtData(verParcial.criadoEm)} · {verParcial.responsavelNome || '-'} · Status:{' '}
+              {verParcial.status}
+            </p>
+          )}
+          {carregandoVer ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16">L</TableHead>
+                  <TableHead className="w-20">Código</TableHead>
+                  <TableHead>Peça</TableHead>
+                  <TableHead className="text-right w-24">Separado</TableHead>
+                  <TableHead className="text-right w-24">Estornado</TableHead>
+                  <TableHead className="text-right w-24">Na parcial</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {verItens.map((i) => {
+                  const original = itemDaVenda(i)
+                  return (
+                    <TableRow key={i.id}>
+                      <TableCell className="font-mono text-xs">
+                        {original?.classificacao || '-'}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{original?.codigo ?? '-'}</TableCell>
+                      <TableCell className="text-sm">
+                        {[original?.referencia, i.descricao].filter(Boolean).join(' — ') || '-'}
+                      </TableCell>
+                      <TableCell className="text-right">{i.quantidade}</TableCell>
+                      <TableCell className="text-right text-muted-foreground">
+                        {i.quantidadeEstornada || '-'}
+                      </TableCell>
+                      <TableCell className="text-right font-semibold">
+                        {i.quantidade - i.quantidadeEstornada}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setVerParcial(null)}>
+              Fechar
+            </Button>
+            <Button onClick={handleReimprimir} disabled={carregandoVer || verItens.length === 0}>
+              <Printer className="w-4 h-4 mr-2" />
+              Reimprimir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* SPEC-099: estorno granular — escolhe peça + quantidade, ou reverte
           a separação inteira de uma vez ("Reverter tudo"). */}
       <Dialog open={!!estornoAlvo} onOpenChange={(open) => !open && handleFecharEstorno()}>
@@ -1162,8 +1243,8 @@ export default function SeparacaoParcialPage() {
             <DialogTitle>Estornar separação</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            Escolha a peça e a quantidade a devolver para a Reserva, ou reverta a separação
-            inteira de uma vez.
+            Escolha a peça e a quantidade a devolver para a Reserva, ou reverta a separação inteira
+            de uma vez.
           </p>
           {carregandoEstornoItens ? (
             <div className="flex items-center justify-center py-6">
@@ -1184,7 +1265,10 @@ export default function SeparacaoParcialPage() {
                     const restante = item.quantidade - item.quantidadeEstornada
                     return (
                       <TableRow key={item.id}>
-                        <TableCell className="text-sm max-w-[200px] truncate" title={item.descricao}>
+                        <TableCell
+                          className="text-sm max-w-[200px] truncate"
+                          title={item.descricao}
+                        >
                           {item.descricao}
                         </TableCell>
                         <TableCell className="text-right text-sm">{restante}</TableCell>
@@ -1305,7 +1389,7 @@ export default function SeparacaoParcialPage() {
                             }`}
                           >
                             <TableCell className="text-sm font-medium">
-                              {r.projetoCodigo || r.orcamentoNumero || '-'}
+                              {r.projetoCodigo || semPrefixo(r.orcamentoNumero) || '-'}
                             </TableCell>
                             <TableCell className="text-sm">{r.clienteNome || '-'}</TableCell>
                             <TableCell className="text-sm">{r.equipeNome || '-'}</TableCell>
@@ -1325,7 +1409,8 @@ export default function SeparacaoParcialPage() {
                   <p className="text-sm">
                     Puxar de:{' '}
                     <span className="font-semibold">
-                      {trocaOrigemEscolhida.projetoCodigo || trocaOrigemEscolhida.orcamentoNumero}{' '}
+                      {trocaOrigemEscolhida.projetoCodigo ||
+                        semPrefixo(trocaOrigemEscolhida.orcamentoNumero)}{' '}
                       — {trocaOrigemEscolhida.clienteNome || 'Cliente não identificado'}
                     </span>
                   </p>
@@ -1372,97 +1457,6 @@ export default function SeparacaoParcialPage() {
               Confirmar troca
             </Button>
           </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* SPEC-180: devoluções aprovadas de material ENTREGUE, aguardando a
-          peça chegar. Confirmar = a peça voltou para a prateleira. */}
-      <Dialog open={devolucoesAbertas} onOpenChange={setDevolucoesAbertas}>
-        <DialogContent className="max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Devoluções aguardando recebimento</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground -mt-2">
-            Material que já estava com o cliente e foi devolvido. Confirme quando a peça
-            chegar — só então ela volta ao estoque disponível.
-          </p>
-          {carregandoDevolucoes ? (
-            <div className="flex items-center justify-center py-10">
-              <Loader2 className="w-6 h-6 animate-spin text-primary" />
-            </div>
-          ) : devolucoesAReceber.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-10">
-              Nenhuma devolução aguardando recebimento.
-            </p>
-          ) : (
-            <div className="max-h-[60vh] overflow-y-auto border rounded-lg">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>L</TableHead>
-                    <TableHead>Peça</TableHead>
-                    <TableHead>Venda</TableHead>
-                    <TableHead>Cliente — Projeto</TableHead>
-                    <TableHead className="text-center">Qtd.</TableHead>
-                    <TableHead>Devolvida em</TableHead>
-                    <TableHead className="w-64">Recebimento</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {devolucoesAReceber.map((d) => (
-                    <TableRow key={d.id}>
-                      <TableCell className="font-mono text-sm">{d.local || '-'}</TableCell>
-                      <TableCell className="text-sm">
-                        <span className="font-mono font-semibold text-[#333333] tracking-wide">
-                          {d.codigoProduto ?? '-'}
-                        </span>
-                        {d.referencia ? ` · ${d.referencia}` : ''}
-                        <br />
-                        <span className="text-xs text-muted-foreground">{d.produto || '-'}</span>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {semPrefixo(d.numeroVenda) || '-'}
-                        <br />
-                        <span className="text-xs text-muted-foreground">{d.empresa || '-'}</span>
-                      </TableCell>
-                      <TableCell className="text-sm">
-                        {d.cliente || '-'}
-                        {d.projetoCodigo && (
-                          <span className="text-muted-foreground"> — {d.projetoCodigo}</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-center text-sm font-semibold">{d.quantidade}</TableCell>
-                      <TableCell className="text-sm whitespace-nowrap">{fmtDataHora(d.criadoEm)}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1.5">
-                          <Input
-                            placeholder="Observação (opcional)"
-                            value={obsRecebimento[d.id] || ''}
-                            onChange={(e) =>
-                              setObsRecebimento((o) => ({ ...o, [d.id]: e.target.value }))
-                            }
-                            className="h-8 text-xs"
-                          />
-                          <Button
-                            size="sm"
-                            onClick={() => handleConfirmarRecebimento(d)}
-                            disabled={recebendoId === d.id}
-                          >
-                            {recebendoId === d.id ? (
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : (
-                              <PackageCheck className="w-4 h-4 mr-2" />
-                            )}
-                            Confirmar recebimento
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
         </DialogContent>
       </Dialog>
 
