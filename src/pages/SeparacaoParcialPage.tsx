@@ -86,6 +86,19 @@ const fmtDia = (v: string | null) => {
 // o dado gravado e a busca continuam com o número completo.
 const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
 
+// Reunião de 05/10 [08:48]: lista "sempre na ordem" dos L (L1, L1, L2, L3...).
+// Sem L vai para o fim; empate mantém a ordem original.
+const numeroDoL = (l: string | null | undefined) => {
+  const m = /(\d+)/.exec(l || '')
+  return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER
+}
+function ordenarPorL<T>(itens: T[], l: (i: T) => string | null | undefined): T[] {
+  return itens
+    .map((item, idx) => ({ item, idx }))
+    .sort((a, b) => numeroDoL(l(a.item)) - numeroDoL(l(b.item)) || a.idx - b.idx)
+    .map((x) => x.item)
+}
+
 // SPEC-091 + SPEC-093: gera e já abre o diálogo de impressão (o usuário
 // escolhe "Salvar como PDF" ou imprimir direto) assim que uma separação é
 // confirmada — sem precisar de biblioteca de PDF nova nem Edge Function,
@@ -120,8 +133,12 @@ function imprimirListaSeparacao(params: {
   // SPEC-176: logo no cabeçalho, sem a coluna "Conf.", referência + descrição
   // numa linha só (cortada com reticências, texto completo no title), Cód.
   // Ref. e Quantidade centralizados, e rodapé só com Entregador e Recebedor.
-  const totalItens = params.itensSeparados.length
-  const totalPecas = params.itensSeparados.reduce((soma, i) => soma + i.quantidade, 0)
+  // Reunião de 05/10: Cód. e Ref. em colunas separadas, "Quant." abreviado,
+  // descrição em letra menor e quebrando linha (antes era cortada com "...") e
+  // itens em ordem de L.
+  const itensOrdenados = ordenarPorL(params.itensSeparados, (i) => i.classificacao)
+  const totalItens = itensOrdenados.length
+  const totalPecas = itensOrdenados.reduce((soma, i) => soma + i.quantidade, 0)
 
   const esc = (v: unknown) =>
     String(v ?? '')
@@ -130,17 +147,17 @@ function imprimirListaSeparacao(params: {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
 
-  const linhas = params.itensSeparados
-    .map((i) => {
-      const refDesc = [i.referencia, i.descricao].filter(Boolean).join(' — ') || '-'
-      return `
+  const linhas = itensOrdenados
+    .map(
+      (i) => `
         <tr>
           <td class="centro">${esc(i.classificacao || '-')}</td>
           <td class="centro">${esc(i.codigo ?? '-')}</td>
-          <td class="linha-unica" title="${esc(refDesc)}">${esc(refDesc)}</td>
+          <td class="ref">${esc(i.referencia || '-')}</td>
+          <td class="descricao">${esc(i.descricao || '-')}</td>
           <td class="centro">${i.quantidade}</td>
-        </tr>`
-    })
+        </tr>`,
+    )
     .join('')
 
   // SPEC-176: só o número da venda (sem prefixo) + a parcial, ex.: "0001-P3".
@@ -182,11 +199,13 @@ function imprimirListaSeparacao(params: {
           th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
           th { background: #f3f3f3; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; }
           th.centro, td.centro { text-align: center; }
-          td.linha-unica { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+          td.ref { font-size: 11px; word-break: break-word; }
+          td.descricao { font-size: 10px; line-height: 1.25; word-break: break-word; }
           tfoot td { font-weight: bold; background: #f9f9f9; }
           .observacoes { margin-top: 18px; }
           .observacoes .linha { border-bottom: 1px solid #999; height: 22px; margin-top: 8px; }
-          .assinaturas { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
+          .declaracao { margin-top: 22px; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; line-height: 1.5; }
+          .assinaturas { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
           .assinatura .papel { font-weight: bold; font-size: 12px; text-transform: uppercase; border-top: 1px solid #111; padding-top: 4px; text-align: center; }
           .assinatura .campo { margin-top: 18px; border-bottom: 1px solid #999; height: 16px; font-size: 10px; color: #666; }
         </style>
@@ -215,14 +234,14 @@ function imprimirListaSeparacao(params: {
         </div>
         <table>
           <colgroup>
-            <col style="width:12%" /><col style="width:13%" /><col /><col style="width:13%" />
+            <col style="width:9%" /><col style="width:9%" /><col style="width:18%" /><col /><col style="width:8%" />
           </colgroup>
           <thead>
-            <tr><th class="centro">Local (L)</th><th class="centro">Cód. Ref.</th><th>Referência / Descrição</th><th class="centro">Quantidade</th></tr>
+            <tr><th class="centro">L</th><th class="centro">Cód.</th><th>Ref.</th><th>Descrição</th><th class="centro">Quant.</th></tr>
           </thead>
           <tbody>${linhas}</tbody>
           <tfoot>
-            <tr><td colspan="3">Total de itens: ${totalItens}</td><td class="centro">${totalPecas}</td></tr>
+            <tr><td colspan="4">Total de itens: ${totalItens}</td><td class="centro">${totalPecas}</td></tr>
           </tfoot>
         </table>
         <div class="observacoes">
@@ -230,6 +249,11 @@ function imprimirListaSeparacao(params: {
           <div class="linha"></div>
           <div class="linha"></div>
           <div class="linha"></div>
+        </div>
+        <!-- Reunião de 05/10 [08:02]: declaração do documento do Connect (SPEC-144), obrigatória. -->
+        <div class="declaracao">
+          Assumo total responsabilidade pelas mercadorias correspondentes a esta entrega,
+          bem como declaro correto o conteúdo e as quantidades mencionadas acima.
         </div>
         <div class="assinaturas">
           ${assinatura('Entregador')}
@@ -584,6 +608,16 @@ export default function SeparacaoParcialPage() {
   const itemDaVenda = (i: ItemParcial) =>
     venda?.itens.find((v) => v.projeto_item_id === i.projetoItemId) ?? null
 
+  // Dados gerais da venda para a janela "Ver itens" (a previsão de entrega
+  // vem da listagem de vendas, que já a carrega).
+  const previsaoDaVenda = venda
+    ? (vendasDisponiveis.find((v) => v.orcamentoNumero === venda.orcamentoNumero)
+        ?.previsaoEntrega ?? null)
+    : null
+  const verItensOrdenados = ordenarPorL(verItens, (i) => itemDaVenda(i)?.classificacao)
+  const totalVerSeparado = verItens.reduce((s, i) => s + i.quantidade, 0)
+  const totalVerEstornado = verItens.reduce((s, i) => s + i.quantidadeEstornada, 0)
+
   const handleReimprimir = () => {
     if (!venda || !verParcial) return
     const itensSeparados = verItens
@@ -605,7 +639,7 @@ export default function SeparacaoParcialPage() {
     imprimirListaSeparacao({
       venda,
       numeroSeparacao: numerosParciais.get(verParcial.id) ?? 0,
-      dataEntregaInformada: '',
+      dataEntregaInformada: previsaoDaVenda || '',
       itensSeparados,
     })
   }
@@ -1167,61 +1201,128 @@ export default function SeparacaoParcialPage() {
         )}
       </main>
 
-      {/* SPEC-182 (S1): o que foi separado em cada parcial + reimpressão. */}
+      {/* SPEC-182 (S1) + pedido de 06/10: janela maior com os dados gerais da
+          venda e da parcial, itens em ordem de L e reimpressão. */}
       <Dialog open={!!verParcial} onOpenChange={(open) => !open && setVerParcial(null)}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
+            <DialogTitle className="flex flex-wrap items-center gap-2">
               Parcial {venda ? semPrefixo(venda.vendaNumero) || venda.orcamentoNumero : ''}-P
               {verParcial ? (numerosParciais.get(verParcial.id) ?? '?') : ''}
+              {verParcial && (
+                <Badge variant={verParcial.status === 'Cancelado' ? 'destructive' : 'outline'}>
+                  {verParcial.status}
+                </Badge>
+              )}
             </DialogTitle>
           </DialogHeader>
-          {verParcial && (
-            <p className="text-sm text-muted-foreground">
-              {fmtData(verParcial.criadoEm)} · {verParcial.responsavelNome || '-'} · Status:{' '}
-              {verParcial.status}
-            </p>
+          {venda && verParcial && (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Venda
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Número:</span>{' '}
+                  <span className="font-semibold">
+                    {semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}
+                  </span>
+                  {venda.empresaNome ? ` · ${venda.empresaNome}` : ''}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Cliente:</span>{' '}
+                  <span className="font-semibold">{venda.clienteNome || '-'}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Projeto:</span>{' '}
+                  {venda.projetoCodigo || '-'} ·{' '}
+                  <span className="text-muted-foreground">Vendedor:</span>{' '}
+                  {venda.vendedorNome || '-'}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Endereço:</span>{' '}
+                  {venda.clienteEndereco
+                    ? `${venda.clienteEndereco}${venda.clienteNumero ? ', ' + venda.clienteNumero : ''}${venda.clienteBairro ? ' - ' + venda.clienteBairro : ''}${venda.clienteCidade ? ' · ' + venda.clienteCidade + (venda.clienteEstado ? '-' + venda.clienteEstado : '') : ''}`
+                    : '-'}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Telefone:</span>{' '}
+                  {venda.clienteTelefone || '-'}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-1">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Parcial
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Separada em:</span>{' '}
+                  <span className="font-semibold">{fmtData(verParcial.criadoEm)}</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Funcionário:</span>{' '}
+                  {verParcial.responsavelNome || '-'}
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Data do orçamento:</span>{' '}
+                  {fmtDataCurta(venda.dataEmissaoOrcamento)} ·{' '}
+                  <span className="text-muted-foreground">Previsão de entrega:</span>{' '}
+                  {previsaoDaVenda ? fmtDia(previsaoDaVenda) : 'A combinar'}
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <Badge variant="secondary">{verItens.length} item(ns)</Badge>
+                  <Badge variant="secondary">{totalVerSeparado} peça(s) separada(s)</Badge>
+                  {totalVerEstornado > 0 && (
+                    <Badge variant="destructive">{totalVerEstornado} estornada(s)</Badge>
+                  )}
+                  <Badge>{totalVerSeparado - totalVerEstornado} na parcial</Badge>
+                </div>
+              </div>
+            </div>
           )}
           {carregandoVer ? (
             <div className="flex justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-16">L</TableHead>
-                  <TableHead className="w-20">Código</TableHead>
-                  <TableHead>Peça</TableHead>
-                  <TableHead className="text-right w-24">Separado</TableHead>
-                  <TableHead className="text-right w-24">Estornado</TableHead>
-                  <TableHead className="text-right w-24">Na parcial</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {verItens.map((i) => {
-                  const original = itemDaVenda(i)
-                  return (
-                    <TableRow key={i.id}>
-                      <TableCell className="font-mono text-xs">
-                        {original?.classificacao || '-'}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">{original?.codigo ?? '-'}</TableCell>
-                      <TableCell className="text-sm">
-                        {[original?.referencia, i.descricao].filter(Boolean).join(' — ') || '-'}
-                      </TableCell>
-                      <TableCell className="text-right">{i.quantidade}</TableCell>
-                      <TableCell className="text-right text-muted-foreground">
-                        {i.quantidadeEstornada || '-'}
-                      </TableCell>
-                      <TableCell className="text-right font-semibold">
-                        {i.quantidade - i.quantidadeEstornada}
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
+            <div className="border rounded-lg overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-16">L</TableHead>
+                    <TableHead className="w-20">Código</TableHead>
+                    <TableHead className="w-40">Referência</TableHead>
+                    <TableHead>Descrição</TableHead>
+                    <TableHead className="text-right w-24">Separado</TableHead>
+                    <TableHead className="text-right w-24">Estornado</TableHead>
+                    <TableHead className="text-right w-24">Na parcial</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {verItensOrdenados.map((i) => {
+                    const original = itemDaVenda(i)
+                    return (
+                      <TableRow key={i.id}>
+                        <TableCell className="font-mono text-xs">
+                          {original?.classificacao || '-'}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {original?.codigo ?? '-'}
+                        </TableCell>
+                        <TableCell className="text-xs">{original?.referencia || '-'}</TableCell>
+                        <TableCell className="text-xs">{i.descricao || '-'}</TableCell>
+                        <TableCell className="text-right">{i.quantidade}</TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {i.quantidadeEstornada || '-'}
+                        </TableCell>
+                        <TableCell className="text-right font-semibold">
+                          {i.quantidade - i.quantidadeEstornada}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setVerParcial(null)}>
