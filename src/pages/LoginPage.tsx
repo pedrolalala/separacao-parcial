@@ -7,8 +7,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 
-const LOGO_URL =
-  'https://vcvcwzmbiftcawncibke.supabase.co/storage/v1/object/public/Logo/lucenera-vertical.png'
+// SPEC-192: endereço do Supabase vem da configuração (migração Ohio -> São Paulo).
+const LOGO_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/Logo/lucenera-vertical.png`
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
