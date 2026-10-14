@@ -4,7 +4,7 @@ import { redirectWithCode } from '@/lib/cross-system-auth'
 import { useSistemasPermitidos } from '@/hooks/useSistemasPermitidos'
 import { cn } from '@/lib/utils'
 
-const HUB_URL = 'https://central-lucenera-dashboard-1c9ba.goskip.app'
+const HUB_URL = 'https://central-lucenera.pages.dev'
 
 function getIcon(iconName: string) {
   const Icon = (Icons as any)[iconName]

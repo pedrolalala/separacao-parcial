@@ -826,7 +826,7 @@ export default function SeparacaoParcialPage() {
           )}
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
           <Button variant="ghost" size="icon" asChild title="Voltar para a Central Lucenera">
-            <a href="https://central-lucenera-dashboard-1c9ba.goskip.app/dashboard">
+            <a href="https://central-lucenera.pages.dev/dashboard">
               <Building2 className="w-4 h-4" />
             </a>
           </Button>
