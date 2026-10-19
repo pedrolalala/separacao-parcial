@@ -36,6 +36,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
+import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
 import {
   buscarVendaPorNumero,
@@ -406,8 +407,10 @@ export default function SeparacaoParcialPage() {
   const termoItem = normalizar(buscaItem.trim())
   const itensVisiveis = useMemo(() => {
     if (!venda) return []
-    if (!termoItem) return venda.itens
-    return venda.itens.filter((i) =>
+    // SPEC-209 G2: em ordem de L, para a linha separadora marcar onde cada L acaba.
+    const itens = ordenarPorL(venda.itens, (i) => i.classificacao)
+    if (!termoItem) return itens
+    return itens.filter((i) =>
       [i.codigo, i.referencia, i.descricao, i.classificacao].some((c) =>
         normalizar(c == null ? '' : String(c)).includes(termoItem),
       ),
@@ -1038,8 +1041,13 @@ export default function SeparacaoParcialPage() {
                   </span>
                 )}
               </div>
-              <div className="overflow-x-auto">
-                <Table>
+              {/* SPEC-209 G1/G4: linhas pretas como no Cadastro (cinza some em algumas telas) e
+                  cabeçalho fixo: a rolagem é desta div, não do invólucro da tabela. */}
+              <div className="overflow-auto max-h-[70vh]">
+                <Table
+                  containerClassName="overflow-visible"
+                  className="border-collapse [&_td]:border [&_td]:border-black [&_th]:border [&_th]:border-black [&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-slate-50 [&_th]:shadow-[inset_1px_0_0_#000,inset_0_1px_0_#000,inset_0_-1px_0_#000]"
+                >
                   <TableHeader>
                     <TableRow>
                       <TableHead className="whitespace-nowrap px-3">Código</TableHead>
@@ -1065,7 +1073,7 @@ export default function SeparacaoParcialPage() {
                           dentro do overflow-x-auto — evita rolar até o fim
                           pra alcançar o botão "Trocar". */}
                       {podeTrocar && (
-                        <TableHead className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]" />
+                        <TableHead className="sticky right-0 !z-30 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]" />
                       )}
                     </TableRow>
                   </TableHeader>
@@ -1080,8 +1088,17 @@ export default function SeparacaoParcialPage() {
                         </TableCell>
                       </TableRow>
                     )}
-                    {itensVisiveis.map((item) => (
-                      <TableRow key={item.projeto_item_id}>
+                    {itensVisiveis.map((item, idx) => (
+                      <TableRow
+                        key={item.projeto_item_id}
+                        className={cn(
+                          'group hover:bg-sky-100 focus-within:bg-sky-200',
+                          idx > 0 &&
+                            (item.classificacao || '-') !==
+                              (itensVisiveis[idx - 1].classificacao || '-') &&
+                            '[&>td]:border-t-[3px]',
+                        )}
+                      >
                         <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm whitespace-nowrap px-3">
                           {item.codigo ?? '-'}
                         </TableCell>
@@ -1148,7 +1165,7 @@ export default function SeparacaoParcialPage() {
                           {item.q_entregue}
                         </TableCell>
                         {podeTrocar && (
-                          <TableCell className="sticky right-0 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
+                          <TableCell className="sticky right-0 bg-card group-hover:bg-sky-100 group-focus-within:bg-sky-200 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
                             {/* SPEC-149: o botão parte de quem PRECISA da
                                 peça (saldo pendente em Entrega Futura), não
                                 mais de quem já tem a reserva. */}
