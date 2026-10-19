@@ -13,6 +13,7 @@ import {
   Users,
   Eye,
   Printer,
+  X,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -31,6 +32,7 @@ import {
   TableHead,
   TableRow,
   TableCell,
+  TableFooter,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
@@ -84,6 +86,13 @@ const fmtDia = (v: string | null) => {
 
 // SPEC-176: na listagem o número aparece sem o prefixo ("VENDA-0001" → "0001");
 // o dado gravado e a busca continuam com o número completo.
+// SPEC-207: busca sem diferenciar maiúscula nem acento.
+const normalizar = (t: string | null | undefined) =>
+  (t ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+
 const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
 
 // Reunião de 05/10 [08:48]: lista "sempre na ordem" dos L (L1, L1, L2, L3...).
@@ -283,6 +292,7 @@ export default function SeparacaoParcialPage() {
   const [carregandoVendas, setCarregandoVendas] = useState(true)
   const [filtro, setFiltro] = useState('')
   const [numeroVenda, setNumeroVenda] = useState('')
+  const [buscaItem, setBuscaItem] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [venda, setVenda] = useState<VendaInfo | null>(null)
@@ -391,6 +401,51 @@ export default function SeparacaoParcialPage() {
     () => parciais.filter((p) => p.status === 'Pendente'),
     [parciais],
   )
+  // SPEC-207: a mesma peça aparece em vários L; a busca deixa só as linhas
+  // dela e soma as quantidades de todos os L no rodapé.
+  const termoItem = normalizar(buscaItem.trim())
+  const itensVisiveis = useMemo(() => {
+    if (!venda) return []
+    if (!termoItem) return venda.itens
+    return venda.itens.filter((i) =>
+      [i.codigo, i.referencia, i.descricao, i.classificacao].some((c) =>
+        normalizar(c == null ? '' : String(c)).includes(termoItem),
+      ),
+    )
+  }, [venda, termoItem])
+  const totaisVisiveis = useMemo(() => {
+    const soma = (f: (i: ItemVenda) => number) =>
+      itensVisiveis.reduce((t, i) => t + (Number(f(i)) || 0), 0)
+    return {
+      q_devolvida: soma((i) => i.q_devolvida),
+      q_venda: soma((i) => i.q_venda),
+      q_entrega_futura: soma((i) => i.q_entrega_futura),
+      q_transferida_saida: soma((i) => i.q_transferida_saida),
+      q_reserva: soma((i) => i.q_reserva),
+      a_separar: itensVisiveis.reduce(
+        (t, i) => t + (Number(quantidades[i.projeto_item_id]) || 0),
+        0,
+      ),
+      q_ag_separar: soma((i) => i.q_ag_separar),
+      q_separado: soma((i) => i.q_separado),
+      q_entregue: soma((i) => i.q_entregue),
+    }
+  }, [itensVisiveis, quantidades])
+  const lsVisiveis = useMemo(
+    () => new Set(itensVisiveis.map((i) => i.classificacao || '-')).size,
+    [itensVisiveis],
+  )
+  // Quantidade digitada numa linha escondida pela busca continua valendo no
+  // "Separar" — avisa para ninguém separar sem ver.
+  const ocultosComQuantidade = useMemo(() => {
+    if (!venda || !termoItem) return 0
+    const visiveis = new Set(itensVisiveis.map((i) => i.projeto_item_id))
+    return venda.itens.filter(
+      (i) =>
+        !visiveis.has(i.projeto_item_id) && (Number(quantidades[i.projeto_item_id]) || 0) > 0,
+    ).length
+  }, [venda, termoItem, itensVisiveis, quantidades])
+
   const vendaSemReserva = venda != null && venda.itens.every((i) => i.q_reserva <= 0)
   const precisaFinalizarManualmente = vendaSemReserva && parciaisPendentes.length > 0
   // Instrução do usuário (2026-09-14): "Boletos desta venda" removido por
@@ -444,6 +499,7 @@ export default function SeparacaoParcialPage() {
     setNumeroVenda('')
     setParciais([])
     setQuantidades({})
+    setBuscaItem('')
     setDataEntrega('')
     setDataEntregaFinal('')
   }
@@ -949,6 +1005,39 @@ export default function SeparacaoParcialPage() {
         {venda && (
           <>
             <div className="bg-card border rounded-xl overflow-hidden">
+              <div className="p-3 border-b flex flex-wrap items-center gap-3">
+                <div className="relative w-full sm:w-96">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={buscaItem}
+                    onChange={(e) => setBuscaItem(e.target.value)}
+                    placeholder="Buscar item por código, referência, descrição ou L..."
+                    className="pl-9 pr-9 h-9"
+                  />
+                  {buscaItem && (
+                    <button
+                      type="button"
+                      onClick={() => setBuscaItem('')}
+                      title="Limpar busca"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {termoItem
+                    ? `${itensVisiveis.length} de ${venda.itens.length} linha(s)` +
+                      (itensVisiveis.length > 0 ? ` em ${lsVisiveis} L` : '')
+                    : `${venda.itens.length} linha(s)`}
+                </span>
+                {ocultosComQuantidade > 0 && (
+                  <span className="text-xs text-amber-700">
+                    Atenção: {ocultosComQuantidade} linha(s) fora da busca têm quantidade em "À
+                    Separar" e também serão separadas.
+                  </span>
+                )}
+              </div>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -981,7 +1070,17 @@ export default function SeparacaoParcialPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {venda.itens.map((item) => (
+                    {termoItem && itensVisiveis.length === 0 && (
+                      <TableRow>
+                        <TableCell
+                          colSpan={podeTrocar ? 14 : 13}
+                          className="text-center text-sm text-muted-foreground py-6"
+                        >
+                          Nenhum item desta venda encontrado com "{buscaItem.trim()}".
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {itensVisiveis.map((item) => (
                       <TableRow key={item.projeto_item_id}>
                         <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm whitespace-nowrap px-3">
                           {item.codigo ?? '-'}
@@ -1069,6 +1168,43 @@ export default function SeparacaoParcialPage() {
                       </TableRow>
                     ))}
                   </TableBody>
+                  {termoItem && itensVisiveis.length > 1 && (
+                    <TableFooter>
+                      <TableRow>
+                        <TableCell colSpan={4} className="px-3 text-sm font-semibold">
+                          Total em {lsVisiveis} L ({itensVisiveis.length} linhas)
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_devolvida}
+                        </TableCell>
+                        <TableCell className="text-right text-sm font-semibold px-2">
+                          {totaisVisiveis.q_venda}
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_entrega_futura}
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_transferida_saida}
+                        </TableCell>
+                        <TableCell className="text-right text-sm font-semibold text-emerald-700 px-2">
+                          {totaisVisiveis.q_reserva}
+                        </TableCell>
+                        <TableCell className="text-right text-sm bg-primary/5 px-2">
+                          {totaisVisiveis.a_separar}
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_ag_separar}
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_separado}
+                        </TableCell>
+                        <TableCell className="text-right text-sm px-2">
+                          {totaisVisiveis.q_entregue}
+                        </TableCell>
+                        {podeTrocar && <TableCell className="sticky right-0 bg-muted/50" />}
+                      </TableRow>
+                    </TableFooter>
+                  )}
                 </Table>
               </div>
               <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
