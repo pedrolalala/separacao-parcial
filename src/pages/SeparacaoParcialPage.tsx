@@ -1041,12 +1041,14 @@ export default function SeparacaoParcialPage() {
                   </span>
                 )}
               </div>
-              {/* SPEC-209 G1/G4: linhas pretas como no Cadastro (cinza some em algumas telas) e
-                  cabeçalho fixo: a rolagem é desta div, não do invólucro da tabela. */}
+              {/* SPEC-209 G1/G4: cabeçalho fixo (a rolagem é desta div, não do invólucro da tabela).
+                  Cada L fica "fechado" em preto (linha grossa entre L, laterais e fim da tabela em
+                  preto); a divisão entre peças do mesmo L e entre colunas fica em cinza, para o L
+                  se destacar mais que a peça. */}
               <div className="overflow-auto max-h-[70vh]">
                 <Table
                   containerClassName="overflow-visible"
-                  className="border-collapse [&_td]:border [&_td]:border-black [&_th]:border [&_th]:border-black [&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-slate-50 [&_th]:shadow-[inset_1px_0_0_#000,inset_0_1px_0_#000,inset_0_-1px_0_#000]"
+                  className="border-collapse [&_td]:border [&_td]:border-gray-400 [&_td:first-child]:border-l-2 [&_td:first-child]:border-l-black [&_td:last-child]:border-r-2 [&_td:last-child]:border-r-black [&_tbody>tr:last-child>td]:border-b-2 [&_tbody>tr:last-child>td]:border-b-black [&_tfoot_td]:border-black [&_th]:border [&_th]:border-black [&_th]:sticky [&_th]:top-0 [&_th]:z-20 [&_th]:bg-slate-50 [&_th]:shadow-[inset_1px_0_0_#000,inset_0_1px_0_#000,inset_0_-1px_0_#000]"
                 >
                   <TableHeader>
                     <TableRow>
@@ -1096,7 +1098,7 @@ export default function SeparacaoParcialPage() {
                           idx > 0 &&
                             (item.classificacao || '-') !==
                               (itensVisiveis[idx - 1].classificacao || '-') &&
-                            '[&>td]:border-t-[3px]',
+                            '[&>td]:border-t-[3px] [&>td]:!border-t-black',
                         )}
                       >
                         <TableCell className="font-mono font-semibold text-[#333333] tracking-wide text-sm whitespace-nowrap px-3">
