@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import * as Icons from 'lucide-react'
 import { redirectWithCode } from '@/lib/cross-system-auth'
 import { useSistemasPermitidos } from '@/hooks/useSistemasPermitidos'
@@ -25,6 +25,20 @@ interface SystemSwitcherProps {
 export function SystemSwitcher({ currentSlug, showHubLink = true }: SystemSwitcherProps) {
   const [expanded, setExpanded] = useState(false)
   const { sistemas, userId } = useSistemasPermitidos(currentSlug)
+
+  // SPEC-217: o card fica por cima do canto direito da tela; a página reserva essa faixa (largura do card
+  // recolhido, w-12) para ele não cobrir a última coluna das tabelas nem a barra de rolagem.
+  useEffect(() => {
+    if (!userId) return
+    const html = document.documentElement
+    const antes = { padding: html.style.paddingRight, overflowX: html.style.overflowX }
+    html.style.paddingRight = '3rem'
+    html.style.overflowX = 'hidden' // telas de carregamento com w-screen não criam rolagem lateral
+    return () => {
+      html.style.paddingRight = antes.padding
+      html.style.overflowX = antes.overflowX
+    }
+  }, [userId])
 
   if (!userId) return null
   if (sistemas.length === 0 && !showHubLink) return null
