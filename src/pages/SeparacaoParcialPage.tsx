@@ -801,7 +801,9 @@ export default function SeparacaoParcialPage() {
     setCarregandoReservas(true)
     try {
       const rows = await getReservasOutrosProjetos(item.produto_id, item.projeto_item_id)
-      setReservasOutras(rows)
+      // SPEC-222 E1: L da própria venda primeiro (troca dentro do mesmo cliente)
+      const mesma = (r: { orcamentoId: string | null }) => (r.orcamentoId && r.orcamentoId === venda?.orcamentoId ? 0 : 1)
+      setReservasOutras([...rows].sort((a, b) => mesma(a) - mesma(b)))
     } catch (err: any) {
       toast.error('Erro ao buscar outras reservas desta peça', { description: err?.message })
     } finally {
@@ -1620,7 +1622,7 @@ export default function SeparacaoParcialPage() {
                   </div>
                 ) : reservasOutras.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg">
-                    Nenhum outro projeto tem essa peça reservada no momento.
+                    Nenhum outro L (desta venda ou de outro projeto) tem essa peça reservada no momento.
                   </p>
                 ) : (
                   <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
@@ -1628,6 +1630,7 @@ export default function SeparacaoParcialPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Projeto</TableHead>
+                          <TableHead>L</TableHead>
                           <TableHead>Cliente</TableHead>
                           <TableHead>Equipe</TableHead>
                           <TableHead className="text-right">Reservado</TableHead>
@@ -1646,7 +1649,13 @@ export default function SeparacaoParcialPage() {
                           >
                             <TableCell className="text-sm font-medium">
                               {r.projetoCodigo || semPrefixo(r.orcamentoNumero) || '-'}
+                              {!!r.orcamentoId && r.orcamentoId === venda?.orcamentoId && (
+                                <span className="ml-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+                                  esta venda
+                                </span>
+                              )}
                             </TableCell>
+                            <TableCell className="text-sm font-mono">{r.lFixo || '-'}</TableCell>
                             <TableCell className="text-sm">{r.clienteNome || '-'}</TableCell>
                             <TableCell className="text-sm">{r.equipeNome || '-'}</TableCell>
                             <TableCell className="text-right text-sm font-semibold">

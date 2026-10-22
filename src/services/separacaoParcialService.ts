@@ -509,6 +509,10 @@ export async function podeTrocarReserva(): Promise<boolean> {
 // de destino no modal de troca.
 export interface ReservaOutroProjeto {
   projetoItemId: string
+  // SPEC-222 E1: a troca também vale entre L da MESMA venda (tira do L que não sai agora para o que precisa
+  // ser entregue) — por isso a lista mostra o L e marca os da própria venda.
+  orcamentoId: string | null
+  lFixo: string | null
   projetoCodigo: string | null
   orcamentoNumero: string | null
   clienteNome: string | null
@@ -526,11 +530,21 @@ export async function getReservasOutrosProjetos(
     .select('*')
     .eq('produto_id', produtoId)
     .neq('projeto_item_id', excluirProjetoItemId)
+    .gt('q_reserva', 0)
 
   if (error) throw error
 
+  const ids = (data || []).map((r: any) => r.projeto_item_id)
+  const lPorItem = new Map<string, string | null>()
+  if (ids.length > 0) {
+    const { data: ls } = await (supabase.from as any)('projeto_itens').select('id, l_fixo').in('id', ids)
+    for (const l of ls || []) lPorItem.set(l.id, l.l_fixo ?? null)
+  }
+
   return (data || []).map((r: any) => ({
     projetoItemId: r.projeto_item_id,
+    orcamentoId: r.orcamento_id ?? null,
+    lFixo: lPorItem.get(r.projeto_item_id) ?? null,
     projetoCodigo: r.projeto_codigo,
     orcamentoNumero: r.orcamento_numero,
     clienteNome: r.cliente_nome,
