@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase/client'
+import type { DadosNovaSeparacao } from '@/components/NovaSeparacaoModal'
 
 // SPEC-072: cada linha representa um projeto_item_id (item de uma venda já
 // aprovada) com o saldo por setor operacional — mesma granularidade de
@@ -38,6 +39,8 @@ export interface VendaInfo {
   empresaNome: string | null
   dataEmissaoOrcamento: string | null
   vendedorNome: string | null
+  /** SPEC-231 D1: equipe do orçamento (equipes_projetos.equipes, ex.: "Marina"). */
+  equipeNome: string | null
   clienteCpfCnpj: string | null
   clienteTelefone: string | null
   clienteEndereco: string | null
@@ -243,7 +246,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     saldoRows[0].orcamento_id
       ? supabase
           .from('orcamentos')
-          .select('data_emissao, empresa:empresas(nome), vendedor:funcionarios(nome)')
+          .select('data_emissao, empresa:empresas(nome), vendedor:funcionarios(nome), equipe:equipes_projetos(equipes)')
           .eq('id', saldoRows[0].orcamento_id)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -296,6 +299,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     empresaNome: (orcamentoRow as any)?.empresa?.nome ?? null,
     dataEmissaoOrcamento: (orcamentoRow as any)?.data_emissao ?? null,
     vendedorNome: (orcamentoRow as any)?.vendedor?.nome ?? null,
+    equipeNome: (orcamentoRow as any)?.equipe?.equipes ?? null,
     clienteCpfCnpj: (clienteRow as any)?.cpf_cnpj ?? null,
     clienteTelefone: (clienteRow as any)?.telefone || (clienteRow as any)?.celular || null,
     clienteEndereco: (clienteRow as any)?.endereco ?? null,
@@ -324,6 +328,8 @@ export async function criarSeparacaoParcial(params: {
     quantidade: number
   }[]
   observacoes?: string
+  /** SPEC-231 D1: dados da tela "Nova Separação" (mesma da Logística). */
+  logistica?: DadosNovaSeparacao
 }): Promise<{ separacaoId: string }> {
   const itensValidos = params.itens.filter((i) => i.quantidade > 0)
   if (itensValidos.length === 0) {
@@ -331,6 +337,38 @@ export async function criarSeparacaoParcial(params: {
   }
 
   const { data: userData } = await supabase.auth.getUser()
+
+  const l = params.logistica
+  // SPEC-231 D1: com os dados da tela "Nova Separação" a separação já vai para
+  // a fila do estoque na Logística ("Solicitado"), igual à criada por lá.
+  const dadosLogistica = l
+    ? {
+        status: 'material_solicitado',
+        tipo_pedido: l.tipoPedido,
+        codigo_obra: l.codigoObra || params.projetoCodigo,
+        cliente: l.cliente || params.clienteNome,
+        // SPEC-231 D1/D4: o número da entrega na Logística é o da parcial (ex.: 0002-P2)
+        numero_entrega: l.numeroParcial,
+        data_entrega: l.dataEntrega,
+        data_entrega_original: l.dataEntrega,
+        solicitante: l.solicitante || null,
+        gestora_equipe: l.gestora,
+        delivery_type: l.horario,
+        responsavel_recebimento: l.responsavel || null,
+        telefone: l.telefone || null,
+        endereco: l.endereco || null,
+        endereco_entrega: l.endereco || null,
+        nivel_complexidade: l.complexidade,
+        tipo_entrega: l.formaEntrega,
+        observacoes_internas: l.observacoes || null,
+        inclui_garantia: l.incluiGarantia,
+        garantia_detalhes: l.garantiaDetalhes || null,
+        garantia_peca: l.garantiaPeca || null,
+        inclui_devolucao: l.incluiDevolucao,
+        devolucao_detalhes: l.devolucaoDetalhes || null,
+        material_tipo: l.anexos.length > 0 ? 'arquivos' : null,
+      }
+    : { status: 'Pendente' }
 
   const { data: separacao, error: separacaoError } = await supabase
     .from('separacoes')
@@ -340,9 +378,9 @@ export async function criarSeparacaoParcial(params: {
       cliente: params.clienteNome,
       codigo_obra: params.projetoCodigo,
       responsavel_id: userData?.user?.id || null,
-      status: 'Pendente',
       observacoes: params.observacoes || null,
-    })
+      ...dadosLogistica,
+    } as any)
     .select('id')
     .single()
 
@@ -383,7 +421,37 @@ export async function criarSeparacaoParcial(params: {
     )
   }
 
+  if (l && l.anexos.length > 0) await enviarAnexosSeparacao(separacaoId, l.codigoObra, l.anexos)
+
   return { separacaoId }
+}
+
+// SPEC-231 D1: mesmo bucket/tabela da Logística (materiais-separacao +
+// separacao_arquivos), para os anexos aparecerem no cartão de lá.
+async function enviarAnexosSeparacao(
+  separacaoId: string,
+  codigoObra: string,
+  anexos: DadosNovaSeparacao['anexos'],
+): Promise<void> {
+  const linhas = []
+  for (let i = 0; i < anexos.length; i++) {
+    const a = anexos[i]
+    const ext = a.file.name.split('.').pop()?.toLowerCase() || 'bin'
+    const caminho = `${codigoObra || 'sem-obra'}/${Date.now()}_${i}.${ext}`
+    const { error } = await supabase.storage.from('materiais-separacao').upload(caminho, a.file)
+    if (error) throw new Error(`Separação criada, mas não foi possível enviar ${a.file.name}: ${error.message}`)
+    linhas.push({
+      separacao_id: separacaoId,
+      nome_arquivo: a.file.name,
+      tipo_arquivo: a.file.type === 'application/pdf' ? 'pdf' : 'imagem',
+      url_arquivo: caminho,
+      tamanho_bytes: a.file.size,
+      ordem: i,
+      categoria: a.categoria,
+    })
+  }
+  const { error } = await (supabase as any).from('separacao_arquivos').insert(linhas)
+  if (error) throw new Error(`Separação criada, mas os anexos não foram registrados: ${error.message}`)
 }
 
 // SPEC-089: quando a última separação de uma venda deixa tudo sem saldo em

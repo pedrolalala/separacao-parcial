@@ -38,6 +38,8 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
+import { supabase } from '@/lib/supabase/client'
+import { NovaSeparacaoModal, type DadosNovaSeparacao } from '@/components/NovaSeparacaoModal'
 import {
   buscarVendaPorNumero,
   criarSeparacaoParcial,
@@ -301,10 +303,22 @@ export default function SeparacaoParcialPage() {
   // SPEC-072: quantidade digitada na coluna "À Separar", por projeto_item_id
   // — zerada a cada "Separar" bem-sucedido.
   const [quantidades, setQuantidades] = useState<Record<string, string>>({})
-  // SPEC-089: opcional — só usada se essa ação de "Separar" deixar a venda
-  // inteira sem saldo em reserva (nada mais a separar), disparando a
-  // integração automática com Logística.
-  const [dataEntrega, setDataEntrega] = useState('')
+  // SPEC-231 D1: itens escolhidos ao clicar em "Separar" — com valor, a tela
+  // "Nova Separação" fica aberta (a data de entrega agora é pedida nela).
+  // SPEC-231 D1: nome de quem está logado (vira o "Solicitante" da Nova Separação)
+  const [meuNome, setMeuNome] = useState('')
+  useEffect(() => {
+    if (!user?.id) return
+    supabase
+      .from('usuarios')
+      .select('nome')
+      .eq('id', user.id)
+      .maybeSingle()
+      .then(({ data }) => setMeuNome((data as any)?.nome ?? ''))
+  }, [user?.id])
+  const [itensParaSeparar, setItensParaSeparar] = useState<
+    { projetoItemId: string; produtoId: string | null; descricao: string | null; quantidade: number }[] | null
+  >(null)
   // Achado no teste de ponta a ponta 13-14/08: se a venda ficar sem
   // reserva SEM que dataEntrega tenha sido preenchida na mesma ação (ou a
   // finalização automática falhar por qualquer motivo), a separação fica
@@ -503,7 +517,6 @@ export default function SeparacaoParcialPage() {
     setParciais([])
     setQuantidades({})
     setBuscaItem('')
-    setDataEntrega('')
     setDataEntregaFinal('')
   }
 
@@ -536,16 +549,26 @@ export default function SeparacaoParcialPage() {
       return
     }
 
+    // SPEC-231 D1: abre a tela "Nova Separação" (mesma da Logística); grava
+    // só quando ela confirmar.
+    setItensParaSeparar(itens)
+  }
+
+  const handleConfirmarSeparacao = async (dados: DadosNovaSeparacao) => {
+    if (!venda || !itensParaSeparar) return
+    const itens = itensParaSeparar
     setSaving(true)
     try {
-      const { separacaoId } = await criarSeparacaoParcial({
+      await criarSeparacaoParcial({
         numeroVenda: venda.orcamentoNumero,
         clienteId: venda.clienteId,
         clienteNome: venda.clienteNome,
         projetoCodigo: venda.projetoCodigo,
         itens,
+        logistica: dados,
       })
-      toast.success('Separação parcial registrada com sucesso.')
+      toast.success('Separação enviada para o estoque separar (Logística → Solicitado).')
+      setItensParaSeparar(null)
 
       // SPEC-091: gera e abre a impressão da lista assim que a separação é
       // confirmada — sem precisar de um clique extra.
@@ -555,7 +578,7 @@ export default function SeparacaoParcialPage() {
       imprimirListaSeparacao({
         venda,
         numeroSeparacao: parciais.length + 1,
-        dataEntregaInformada: dataEntrega,
+        dataEntregaInformada: dados.dataEntrega,
         itensSeparados: itens.map((i) => {
           const original = venda.itens.find((v) => v.projeto_item_id === i.projetoItemId)
           return {
@@ -568,33 +591,16 @@ export default function SeparacaoParcialPage() {
         }),
       })
 
+      // SPEC-231 D1: a separação já nasce em 'material_solicitado' com a data
+      // de entrega da tela — não precisa mais do finalizarSeparacaoPronta da
+      // SPEC-089 quando a venda fica completa.
       const [vendaAtualizada, historico] = await Promise.all([
         buscarVendaPorNumero(venda.orcamentoNumero),
         listarParciaisPorVenda(venda.orcamentoNumero),
       ])
-
-      // SPEC-089: se essa ação deixou a venda inteira sem saldo em reserva
-      // (nada mais a separar) e a pessoa informou data de entrega, finaliza
-      // a separação para o estoque ('material_solicitado' — SPEC-231 A1: antes
-      // ia como 'Pronto' e as peças viravam Separado sozinhas) e cria a entrega
-      // em Logística, sem precisar reentrar isso lá.
-      const vendaCompleta =
-        vendaAtualizada != null && vendaAtualizada.itens.every((i) => i.q_reserva <= 0)
-      if (vendaCompleta && dataEntrega) {
-        try {
-          await finalizarSeparacaoPronta(separacaoId, dataEntrega)
-          toast.success('Venda toda pedida — enviada para o estoque separar e entrega criada na Logística.')
-        } catch (err: any) {
-          toast.error('Separação salva, mas não foi possível criar a entrega automática.', {
-            description: err?.message,
-          })
-        }
-      }
-
       setVenda(vendaAtualizada)
       setParciais(historico)
       setQuantidades({})
-      setDataEntrega('')
     } catch (err: any) {
       toast.error('Erro ao registrar separação', { description: err?.message })
     } finally {
@@ -1230,17 +1236,6 @@ export default function SeparacaoParcialPage() {
                 </Table>
               </div>
               <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs font-semibold uppercase text-muted-foreground">
-                    Data de entrega (se esta ação completar a venda)
-                  </label>
-                  <Input
-                    type="date"
-                    value={dataEntrega}
-                    onChange={(e) => setDataEntrega(e.target.value)}
-                    className="h-9 w-44"
-                  />
-                </div>
                 <Button onClick={handleSeparar} disabled={saving}>
                   {saving ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -1361,6 +1356,39 @@ export default function SeparacaoParcialPage() {
 
       {/* SPEC-182 (S1) + pedido de 06/10: janela maior com os dados gerais da
           venda e da parcial, itens em ordem de L e reimpressão. */}
+      {venda && (
+        <NovaSeparacaoModal
+          open={!!itensParaSeparar}
+          onClose={() => setItensParaSeparar(null)}
+          onConfirm={handleConfirmarSeparacao}
+          saving={saving}
+          prefill={{
+            codigoObra: venda.projetoCodigo ?? '',
+            // mesmo número que sai na impressão (SPEC-176)
+            numeroParcial: `${semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P${parciais.length + 1}`,
+            equipe: venda.equipeNome,
+            numeroVenda: venda.vendaNumero
+              ? `${venda.vendaNumero} (${venda.orcamentoNumero})`
+              : venda.orcamentoNumero,
+            solicitante: meuNome || user?.email || '',
+            cliente: venda.clienteNome ?? '',
+            telefone: venda.clienteTelefone ?? '',
+            endereco: [
+              [venda.clienteEndereco, venda.clienteNumero].filter(Boolean).join(', '),
+              venda.clienteBairro,
+              [venda.clienteCidade, venda.clienteEstado].filter(Boolean).join(' - '),
+            ]
+              .filter(Boolean)
+              .join(', '),
+          }}
+          itens={(itensParaSeparar ?? []).map((i) => ({
+            descricao: i.descricao,
+            codigo: venda.itens.find((v) => v.projeto_item_id === i.projetoItemId)?.codigo ?? null,
+            quantidade: i.quantidade,
+          }))}
+        />
+      )}
+
       <Dialog open={!!verParcial} onOpenChange={(open) => !open && setVerParcial(null)}>
         <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
