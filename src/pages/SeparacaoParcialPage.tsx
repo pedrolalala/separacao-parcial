@@ -1367,9 +1367,8 @@ export default function SeparacaoParcialPage() {
             // mesmo número que sai na impressão (SPEC-176)
             numeroParcial: `${semPrefixo(venda.vendaNumero) || venda.orcamentoNumero}-P${parciais.length + 1}`,
             equipe: venda.equipeNome,
-            numeroVenda: venda.vendaNumero
-              ? `${venda.vendaNumero} (${venda.orcamentoNumero})`
-              : venda.orcamentoNumero,
+            // só o número, sem "VENDA-" e sem o orçamento (ex.: 0003)
+            numeroVenda: semPrefixo(venda.vendaNumero) || semPrefixo(venda.orcamentoNumero) || '',
             solicitante: meuNome || user?.email || '',
             cliente: venda.clienteNome ?? '',
             telefone: venda.clienteTelefone ?? '',
