@@ -575,14 +575,15 @@ export default function SeparacaoParcialPage() {
 
       // SPEC-089: se essa ação deixou a venda inteira sem saldo em reserva
       // (nada mais a separar) e a pessoa informou data de entrega, finaliza
-      // a separação como 'Pronto' — dispara automaticamente a criação da
-      // entrega em Logística, sem precisar reentrar isso lá.
+      // a separação para o estoque ('material_solicitado' — SPEC-231 A1: antes
+      // ia como 'Pronto' e as peças viravam Separado sozinhas) e cria a entrega
+      // em Logística, sem precisar reentrar isso lá.
       const vendaCompleta =
         vendaAtualizada != null && vendaAtualizada.itens.every((i) => i.q_reserva <= 0)
       if (vendaCompleta && dataEntrega) {
         try {
           await finalizarSeparacaoPronta(separacaoId, dataEntrega)
-          toast.success('Venda totalmente separada — entrega criada automaticamente na Logística.')
+          toast.success('Venda toda pedida — enviada para o estoque separar e entrega criada na Logística.')
         } catch (err: any) {
           toast.error('Separação salva, mas não foi possível criar a entrega automática.', {
             description: err?.message,
@@ -616,7 +617,7 @@ export default function SeparacaoParcialPage() {
       for (const parcial of parciaisPendentes) {
         await finalizarSeparacaoPronta(parcial.id, dataEntregaFinal)
       }
-      toast.success('Entrega finalizada — criada automaticamente na Logística.')
+      toast.success('Enviada para o estoque separar — entrega criada na Logística.')
       const [vendaAtualizada, historico] = await Promise.all([
         buscarVendaPorNumero(venda.orcamentoNumero),
         listarParciaisPorVenda(venda.orcamentoNumero),

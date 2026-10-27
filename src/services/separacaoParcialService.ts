@@ -387,10 +387,10 @@ export async function criarSeparacaoParcial(params: {
 }
 
 // SPEC-089: quando a última separação de uma venda deixa tudo sem saldo em
-// reserva (nada mais a separar), marca a separação como 'Pronto' com a
-// data de entrega informada — reaproveita o trigger trg_separacao_pronta
-// já existente no banco (cria automaticamente a linha em `entregas`, sem
-// o Matheus ter que reentrar isso na Logística). A RPC reconfere no
+// reserva (nada mais a separar), envia a separação para o estoque
+// ('material_solicitado' desde a SPEC-231 A1; antes era 'Pronto') com a
+// data de entrega informada — a RPC cria a linha em `entregas`, sem o
+// Matheus ter que reentrar isso na Logística. A RPC reconfere no
 // servidor que a venda está mesmo completa antes de mudar o status.
 export async function finalizarSeparacaoPronta(
   separacaoId: string,
