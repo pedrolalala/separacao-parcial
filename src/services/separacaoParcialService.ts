@@ -56,6 +56,18 @@ export interface ParcialHistorico {
   responsavelNome: string | null
   status: string
   itens: number
+  // SPEC-231 D2/D3: dados da entrega (editáveis antes de sair) e o que a Logística registrou ao entregar.
+  dataEntrega: string | null
+  endereco: string | null
+  responsavelRecebimento: string | null
+  telefone: string | null
+  observacoes: string | null
+  entrega: {
+    recebidoPor: string | null
+    entreguePor: string | null
+    dataReal: string | null
+    observacoes: string | null
+  } | null
 }
 
 export interface VendaDisponivel {
@@ -542,7 +554,7 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
   const { data, error } = await supabase
     .from('separacoes')
     .select(
-      'id, created_at, status, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id)',
+      'id, created_at, status, data_entrega, endereco, endereco_entrega, responsavel_recebimento, telefone, observacoes_internas, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id), entrega:entregas_finalizadas(recebido_por, entregue_por, data_entrega_real, observacoes)',
     )
     .eq('numero_venda', numero)
     .order('created_at', { ascending: false })
@@ -555,7 +567,56 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
     responsavelNome: row.responsavel?.nome ?? null,
     status: row.status,
     itens: row.itens?.length || 0,
+    dataEntrega: row.data_entrega ?? null,
+    endereco: row.endereco_entrega || row.endereco || null,
+    responsavelRecebimento: row.responsavel_recebimento ?? null,
+    telefone: row.telefone ?? null,
+    observacoes: row.observacoes_internas ?? null,
+    entrega: (() => {
+      const e = Array.isArray(row.entrega) ? row.entrega[0] : row.entrega
+      return e
+        ? {
+            recebidoPor: e.recebido_por ?? null,
+            entreguePor: e.entregue_por ?? null,
+            dataReal: e.data_entrega_real ?? null,
+            observacoes: e.observacoes ?? null,
+          }
+        : null
+    })(),
   }))
+}
+
+// SPEC-231 D2: as meninas corrigem endereço/observações de uma parcial já enviada, enquanto não saiu
+// para entrega (sem abrir solicitação nova). Mesmos campos que a Logística lê no cartão.
+export const STATUS_PARCIAL_EDITAVEL = ['Pendente', 'material_solicitado', 'Em separação', 'separado', 'Pronto', 'recusado']
+
+export async function atualizarDadosEntregaParcial(
+  separacaoId: string,
+  dados: {
+    dataEntrega: string | null
+    endereco: string
+    responsavelRecebimento: string
+    telefone: string
+    observacoes: string
+  },
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('separacoes')
+    .update({
+      data_entrega: dados.dataEntrega || null,
+      endereco: dados.endereco || null,
+      endereco_entrega: dados.endereco || null,
+      responsavel_recebimento: dados.responsavelRecebimento || null,
+      telefone: dados.telefone || null,
+      observacoes_internas: dados.observacoes || null,
+    } as any)
+    .eq('id', separacaoId)
+    .in('status', STATUS_PARCIAL_EDITAVEL as any)
+    .select('id')
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error('Esta parcial já saiu para entrega ou foi estornada — não dá mais para editar.')
+  }
 }
 
 // SPEC-098: troca de peça em Reserva entre dois projetos (mesmo produto),

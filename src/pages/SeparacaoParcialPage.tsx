@@ -14,6 +14,7 @@ import {
   Eye,
   Printer,
   X,
+  Pencil,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -53,6 +54,8 @@ import {
   listarLogTrocas,
   listarItensDaParcial,
   estornarItemSeparacao,
+  atualizarDadosEntregaParcial,
+  STATUS_PARCIAL_EDITAVEL,
   type VendaInfo,
   type ParcialHistorico,
   type VendaDisponivel,
@@ -97,6 +100,19 @@ const normalizar = (t: string | null | undefined) =>
     .toLowerCase()
 
 const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
+
+// SPEC-231 D3: status da separação como aparece para as meninas (o mesmo andamento da Logística).
+const STATUS_PARCIAL_LABEL: Record<string, string> = {
+  Pendente: 'Aguardando data de entrega',
+  material_solicitado: 'Solicitado ao estoque',
+  'Em separação': 'Em separação',
+  separado: 'Separado',
+  Pronto: 'Separado',
+  finalizado: 'Entregue',
+  Cancelado: 'Estornado',
+  recusado: 'Recusado pelo estoque',
+}
+const statusParcial = (s: string) => STATUS_PARCIAL_LABEL[s] ?? s
 
 // Reunião de 05/10 [08:48]: lista "sempre na ordem" dos L (L1, L1, L2, L3...).
 // Sem L vai para o fim; empate mantém a ordem original.
@@ -360,6 +376,16 @@ export default function SeparacaoParcialPage() {
   const [carregandoLog, setCarregandoLog] = useState(false)
   // SPEC-182 (S1): ver o que foi em cada parcial (e reimprimir).
   const [verParcial, setVerParcial] = useState<ParcialHistorico | null>(null)
+  // SPEC-231 D2: edição dos dados de entrega da parcial aberta em "Ver itens"
+  const [editandoEntrega, setEditandoEntrega] = useState(false)
+  const [salvandoEntrega, setSalvandoEntrega] = useState(false)
+  const [formEntrega, setFormEntrega] = useState({
+    dataEntrega: '',
+    endereco: '',
+    responsavelRecebimento: '',
+    telefone: '',
+    observacoes: '',
+  })
   const [verItens, setVerItens] = useState<ItemParcial[]>([])
   const [carregandoVer, setCarregandoVer] = useState(false)
 
@@ -660,6 +686,7 @@ export default function SeparacaoParcialPage() {
   // quanto já foi estornado; a mesma lista alimenta a reimpressão.
   const handleVerParcial = async (parcial: ParcialHistorico) => {
     setVerParcial(parcial)
+    setEditandoEntrega(false)
     setVerItens([])
     setCarregandoVer(true)
     try {
@@ -683,6 +710,23 @@ export default function SeparacaoParcialPage() {
   const verItensOrdenados = ordenarPorL(verItens, (i) => itemDaVenda(i)?.classificacao)
   const totalVerSeparado = verItens.reduce((s, i) => s + i.quantidade, 0)
   const totalVerEstornado = verItens.reduce((s, i) => s + i.quantidadeEstornada, 0)
+
+  const handleSalvarEntrega = async () => {
+    if (!verParcial || !venda) return
+    setSalvandoEntrega(true)
+    try {
+      await atualizarDadosEntregaParcial(verParcial.id, formEntrega)
+      toast.success('Dados da entrega atualizados — a Logística já vê a mudança.')
+      const historico = await listarParciaisPorVenda(venda.orcamentoNumero)
+      setParciais(historico)
+      setVerParcial(historico.find((x) => x.id === verParcial.id) ?? null)
+      setEditandoEntrega(false)
+    } catch (err: any) {
+      toast.error('Não foi possível salvar', { description: err?.message })
+    } finally {
+      setSalvandoEntrega(false)
+    }
+  }
 
   const handleReimprimir = () => {
     if (!venda || !verParcial) return
@@ -1310,6 +1354,7 @@ export default function SeparacaoParcialPage() {
                       <TableHead>Funcionário</TableHead>
                       <TableHead>Data</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Entrega</TableHead>
                       <TableHead />
                     </TableRow>
                   </TableHeader>
@@ -1323,9 +1368,19 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-sm">{p.responsavelNome || '-'}</TableCell>
                         <TableCell className="text-sm">{fmtData(p.criadoEm)}</TableCell>
                         <TableCell>
-                          <Badge variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}>
-                            {p.status}
+                          <Badge
+                            variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}
+                            className={cn(p.status === 'finalizado' && 'border-green-500 text-green-700')}
+                          >
+                            {statusParcial(p.status)}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {p.entrega
+                            ? `Entregue ${p.entrega.dataReal ? fmtData(p.entrega.dataReal) : ''}${p.entrega.recebidoPor ? ` · recebeu ${p.entrega.recebidoPor}` : ''}`
+                            : p.dataEntrega
+                              ? `Prevista ${fmtDia(p.dataEntrega)}`
+                              : '-'}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
                           <Button variant="ghost" size="sm" onClick={() => handleVerParcial(p)}>
@@ -1396,7 +1451,7 @@ export default function SeparacaoParcialPage() {
               {verParcial ? (numerosParciais.get(verParcial.id) ?? '?') : ''}
               {verParcial && (
                 <Badge variant={verParcial.status === 'Cancelado' ? 'destructive' : 'outline'}>
-                  {verParcial.status}
+                  {statusParcial(verParcial.status)}
                 </Badge>
               )}
             </DialogTitle>
@@ -1462,6 +1517,132 @@ export default function SeparacaoParcialPage() {
                   <Badge>{totalVerSeparado - totalVerEstornado} na parcial</Badge>
                 </div>
               </div>
+            </div>
+          )}
+          {/* SPEC-231 D2/D3: entrega desta parcial — o que a Logística vai usar e, depois, quem recebeu */}
+          {verParcial && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Entrega · {statusParcial(verParcial.status)}
+                </p>
+                {STATUS_PARCIAL_EDITAVEL.includes(verParcial.status) && !editandoEntrega && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7"
+                    onClick={() => {
+                      setFormEntrega({
+                        dataEntrega: verParcial.dataEntrega ?? '',
+                        endereco: verParcial.endereco ?? '',
+                        responsavelRecebimento: verParcial.responsavelRecebimento ?? '',
+                        telefone: verParcial.telefone ?? '',
+                        observacoes: verParcial.observacoes ?? '',
+                      })
+                      setEditandoEntrega(true)
+                    }}
+                  >
+                    <Pencil className="w-3.5 h-3.5 mr-1" /> Editar
+                  </Button>
+                )}
+              </div>
+              {editandoEntrega ? (
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Data de entrega</span>
+                    <Input
+                      type="date"
+                      className="h-8"
+                      value={formEntrega.dataEntrega}
+                      onChange={(e) => setFormEntrega({ ...formEntrega, dataEntrega: e.target.value })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Responsável na obra</span>
+                    <Input
+                      className="h-8"
+                      value={formEntrega.responsavelRecebimento}
+                      onChange={(e) =>
+                        setFormEntrega({ ...formEntrega, responsavelRecebimento: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="space-y-1 md:col-span-2">
+                    <span className="text-xs text-muted-foreground">Endereço de entrega</span>
+                    <Textarea
+                      rows={2}
+                      value={formEntrega.endereco}
+                      onChange={(e) => setFormEntrega({ ...formEntrega, endereco: e.target.value })}
+                    />
+                  </label>
+                  <label className="space-y-1">
+                    <span className="text-xs text-muted-foreground">Telefone</span>
+                    <Input
+                      className="h-8"
+                      value={formEntrega.telefone}
+                      onChange={(e) => setFormEntrega({ ...formEntrega, telefone: e.target.value })}
+                    />
+                  </label>
+                  <label className="space-y-1 md:col-span-2">
+                    <span className="text-xs text-muted-foreground">Observações da entrega</span>
+                    <Textarea
+                      rows={2}
+                      placeholder="Ex.: falar com o eletricista na chegada"
+                      value={formEntrega.observacoes}
+                      onChange={(e) => setFormEntrega({ ...formEntrega, observacoes: e.target.value })}
+                    />
+                  </label>
+                  <div className="flex justify-end gap-2 md:col-span-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={salvandoEntrega}
+                      onClick={() => setEditandoEntrega(false)}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button size="sm" disabled={salvandoEntrega} onClick={handleSalvarEntrega}>
+                      {salvandoEntrega && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+                      Salvar
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-x-6 gap-y-1 md:grid-cols-2">
+                  <p>
+                    <span className="text-muted-foreground">Previsão:</span>{' '}
+                    {verParcial.dataEntrega ? fmtDia(verParcial.dataEntrega) : 'A combinar'}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Responsável na obra:</span>{' '}
+                    {verParcial.responsavelRecebimento || '-'}
+                  </p>
+                  <p className="md:col-span-2">
+                    <span className="text-muted-foreground">Endereço:</span> {verParcial.endereco || '-'}
+                  </p>
+                  <p>
+                    <span className="text-muted-foreground">Telefone:</span> {verParcial.telefone || '-'}
+                  </p>
+                  {verParcial.observacoes && (
+                    <p className="md:col-span-2">
+                      <span className="text-muted-foreground">Observações:</span> {verParcial.observacoes}
+                    </p>
+                  )}
+                  {verParcial.entrega && (
+                    <div className="md:col-span-2 mt-1 rounded-md border border-green-300 bg-green-50 p-2 text-green-900">
+                      <p className="font-semibold">
+                        Entregue
+                        {verParcial.entrega.dataReal ? ` em ${fmtDataHora(verParcial.entrega.dataReal)}` : ''}
+                      </p>
+                      <p>
+                        Recebido por: <b>{verParcial.entrega.recebidoPor || '-'}</b>
+                        {verParcial.entrega.entreguePor ? ` · entregue por ${verParcial.entrega.entreguePor}` : ''}
+                      </p>
+                      {verParcial.entrega.observacoes && <p>{verParcial.entrega.observacoes}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {carregandoVer ? (
