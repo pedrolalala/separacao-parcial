@@ -237,6 +237,10 @@ function imprimirListaSeparacao(params: {
           .declaracao { margin-top: 22px; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase; line-height: 1.5; }
           .assinaturas { margin-top: 32px; display: grid; grid-template-columns: 1fr 1fr; gap: 48px; }
           .assinatura .papel { font-weight: bold; font-size: 12px; text-transform: uppercase; border-top: 1px solid #111; padding-top: 4px; text-align: center; }
+          /* SPEC-231 (27/10): processo interno em duas etapas — quem separou e quem conferiu */
+          .internas { margin-top: 28px; padding-top: 8px; border-top: 1px dashed #999; page-break-inside: avoid; }
+          .internas .titulo-internas { font-size: 10px; color: #666; text-transform: uppercase; letter-spacing: 0.3px; }
+          .internas .assinaturas { margin-top: 26px; }
           .assinatura .campo { margin-top: 18px; border-bottom: 1px solid #999; height: 16px; font-size: 10px; color: #666; }
         </style>
       </head>
@@ -288,6 +292,13 @@ function imprimirListaSeparacao(params: {
         <div class="assinaturas">
           ${assinatura('Entregador')}
           ${assinatura('Recebedor')}
+        </div>
+        <div class="internas">
+          <div class="titulo-internas">Controle interno</div>
+          <div class="assinaturas">
+            ${assinatura('Separado por')}
+            ${assinatura('Conferido por')}
+          </div>
         </div>
       </body>
     </html>
