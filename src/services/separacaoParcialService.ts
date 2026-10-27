@@ -10,6 +10,8 @@ export interface ItemVenda {
   produto_id: string | null
   codigo: number | null
   referencia: string | null
+  /** SPEC-231 (27/10): marca da peça, sai no Pedido em Separação */
+  marca: string | null
   descricao: string | null
   classificacao: string | null
   q_devolvida: number
@@ -242,7 +244,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
   ] = await Promise.all([
     supabase.from('projeto_itens').select('id, l_fixo').in('id', projetoItemIds),
     produtoIds.length > 0
-      ? supabase.from('produtos').select('id, referencia').in('id', produtoIds)
+      ? supabase.from('produtos').select('id, referencia, marca:marcas(nome)').in('id', produtoIds)
       : Promise.resolve({ data: [], error: null }),
     saldoRows[0].cliente_id
       ? supabase
@@ -280,6 +282,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       produto_id: r.produto_id,
       codigo: r.produto_codigo,
       referencia: produto?.referencia ?? null,
+      marca: (Array.isArray(produto?.marca) ? produto.marca[0] : produto?.marca)?.nome ?? null,
       descricao: r.produto,
       classificacao: detalhe?.l_fixo ?? null,
       q_devolvida: Number(r.q_devolvida) || 0,

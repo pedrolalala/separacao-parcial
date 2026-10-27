@@ -146,6 +146,7 @@ function imprimirListaSeparacao(params: {
     descricao: string
     codigo: number | null
     referencia: string | null
+    marca: string | null
     classificacao: string | null
     quantidade: number
   }[]
@@ -182,6 +183,7 @@ function imprimirListaSeparacao(params: {
           <td class="centro">${esc(i.classificacao || '-')}</td>
           <td class="centro">${esc(i.codigo ?? '-')}</td>
           <td class="ref">${esc(i.referencia || '-')}</td>
+          <td class="ref">${esc(i.marca || '-')}</td>
           <td class="descricao">${esc(i.descricao || '-')}</td>
           <td class="centro">${i.quantidade}</td>
         </tr>`,
@@ -262,14 +264,14 @@ function imprimirListaSeparacao(params: {
         </div>
         <table>
           <colgroup>
-            <col style="width:9%" /><col style="width:9%" /><col style="width:18%" /><col /><col style="width:8%" />
+            <col style="width:8%" /><col style="width:8%" /><col style="width:16%" /><col style="width:13%" /><col /><col style="width:7%" />
           </colgroup>
           <thead>
-            <tr><th class="centro">ID</th><th class="centro">Cód.</th><th>Ref.</th><th>Descrição</th><th class="centro">Quant.</th></tr>
+            <tr><th class="centro">ID</th><th class="centro">Cód.</th><th>Ref.</th><th>Marca</th><th>Descrição</th><th class="centro">Quant.</th></tr>
           </thead>
           <tbody>${linhas}</tbody>
           <tfoot>
-            <tr><td colspan="4">Total de itens: ${totalItens}</td><td class="centro">${totalPecas}</td></tr>
+            <tr><td colspan="5">Total de itens: ${totalItens}</td><td class="centro">${totalPecas}</td></tr>
           </tfoot>
         </table>
         <div class="observacoes">
@@ -611,6 +613,7 @@ export default function SeparacaoParcialPage() {
             descricao: i.descricao,
             codigo: original?.codigo ?? null,
             referencia: original?.referencia ?? null,
+            marca: original?.marca ?? null,
             classificacao: original?.classificacao ?? null,
             quantidade: i.quantidade,
           }
@@ -737,6 +740,7 @@ export default function SeparacaoParcialPage() {
           descricao: i.descricao,
           codigo: original?.codigo ?? null,
           referencia: original?.referencia ?? null,
+          marca: original?.marca ?? null,
           classificacao: original?.classificacao ?? null,
           quantidade: i.quantidade - i.quantidadeEstornada,
         }
