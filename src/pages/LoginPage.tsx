@@ -44,7 +44,7 @@ export default function LoginPage() {
       <div className="w-full max-w-[420px] bg-card rounded-2xl shadow-lg p-8 sm:p-12 border">
         <div className="text-center mb-10">
           <img src={LOGO_URL} alt="Lucenera" className="mx-auto mb-4 h-16 w-auto object-contain" />
-          <h1 className="text-xl font-bold">Separação Parcial</h1>
+          <h1 className="text-xl font-bold">Venda Parcial</h1>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">

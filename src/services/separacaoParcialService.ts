@@ -634,6 +634,31 @@ export async function podeTrocarReserva(): Promise<boolean> {
   return !!data
 }
 
+// SPEC-235 B: ajuste Reserva <-> Entrega Futura dentro da MESMA venda — só o Matheus e admin
+// (pode_ajustar_reserva_venda). A troca entre vendas diferentes continua em podeTrocarReserva.
+export type AjusteReservaAcao = 'reserva_para_entrega_futura' | 'entrega_futura_para_reserva'
+
+export async function podeAjustarReservaVenda(): Promise<boolean> {
+  const { data, error } = await (supabase as any).rpc('pode_ajustar_reserva_venda')
+  if (error) throw error
+  return !!data
+}
+
+export async function ajustarReservaVenda(params: {
+  projetoItemId: string
+  acao: AjusteReservaAcao
+  quantidade: number
+  motivo: string
+}): Promise<void> {
+  const { error } = await (supabase as any).rpc('ajustar_reserva_venda', {
+    p_projeto_item_id: params.projetoItemId,
+    p_acao: params.acao,
+    p_quantidade: params.quantidade,
+    p_motivo: params.motivo,
+  })
+  if (error) throw error
+}
+
 // SPEC-098: mesma informação do card de peça do Cadastro Lucenera (SPEC-049)
 // — "Reservado por Cliente/Projeto" — lendo a mesma view já em produção
 // (vw_cadastro_produto_reserva_detalhe), filtrada por produto e excluindo o

@@ -15,6 +15,7 @@ import {
   Printer,
   X,
   Pencil,
+  ArrowUpDown,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -49,6 +50,9 @@ import {
   listarParciaisPorVenda,
   listarVendasDisponiveis,
   podeTrocarReserva,
+  podeAjustarReservaVenda,
+  ajustarReservaVenda,
+  type AjusteReservaAcao,
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
@@ -384,6 +388,13 @@ export default function SeparacaoParcialPage() {
   const [trocaQuantidade, setTrocaQuantidade] = useState('')
   const [trocaMotivo, setTrocaMotivo] = useState('')
   const [trocando, setTrocando] = useState(false)
+  // SPEC-235 B: ajuste Reserva <-> Entrega Futura dentro desta venda (só Matheus/admin, decidido no banco)
+  const [podeAjustar, setPodeAjustar] = useState(false)
+  const [ajusteItem, setAjusteItem] = useState<ItemVenda | null>(null)
+  const [ajusteAcao, setAjusteAcao] = useState<AjusteReservaAcao>('reserva_para_entrega_futura')
+  const [ajusteQuantidade, setAjusteQuantidade] = useState('')
+  const [ajusteMotivo, setAjusteMotivo] = useState('')
+  const [ajustando, setAjustando] = useState(false)
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
@@ -419,7 +430,12 @@ export default function SeparacaoParcialPage() {
     podeTrocarReserva()
       .then(setPodeTrocar)
       .catch(() => setPodeTrocar(false))
+    podeAjustarReservaVenda()
+      .then(setPodeAjustar)
+      .catch(() => setPodeAjustar(false))
   }, [])
+
+  const temAcoes = podeTrocar || podeAjustar
 
   const vendasFiltradas = useMemo(() => {
     const termo = filtro.trim().toLowerCase()
@@ -921,6 +937,52 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  const handleAbrirAjuste = (item: ItemVenda) => {
+    setAjusteItem(item)
+    setAjusteAcao(item.q_reserva > 0 ? 'reserva_para_entrega_futura' : 'entrega_futura_para_reserva')
+    setAjusteQuantidade('')
+    setAjusteMotivo('')
+  }
+
+  const ajusteMax = ajusteItem
+    ? ajusteAcao === 'reserva_para_entrega_futura'
+      ? ajusteItem.q_reserva
+      : ajusteItem.q_entrega_futura
+    : 0
+
+  const handleConfirmarAjuste = async () => {
+    if (!ajusteItem || !venda) return
+    const quantidade = Number(ajusteQuantidade)
+    if (!quantidade || quantidade <= 0 || quantidade > ajusteMax) {
+      toast.error(`Informe uma quantidade entre 1 e ${ajusteMax}.`)
+      return
+    }
+    if (!ajusteMotivo.trim()) {
+      toast.error('Informe o motivo.')
+      return
+    }
+    setAjustando(true)
+    try {
+      await ajustarReservaVenda({
+        projetoItemId: ajusteItem.projeto_item_id,
+        acao: ajusteAcao,
+        quantidade,
+        motivo: ajusteMotivo.trim(),
+      })
+      toast.success(
+        ajusteAcao === 'reserva_para_entrega_futura'
+          ? `${quantidade} unidade(s) passada(s) de Reserva para Entrega Futura.`
+          : `${quantidade} unidade(s) passada(s) de Entrega Futura para Reserva.`,
+      )
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setAjusteItem(null)
+    } catch (err: any) {
+      toast.error('Erro ao ajustar', { description: err?.message })
+    } finally {
+      setAjustando(false)
+    }
+  }
+
   // SPEC-098: "Log de Trocas" — histórico completo de trocas já aprovadas,
   // não só desta venda, pra ficar fácil de auditar quem fez o quê.
   const handleAbrirLog = async () => {
@@ -942,7 +1004,7 @@ export default function SeparacaoParcialPage() {
         <div className="flex items-center gap-3">
           <img src={LOGO_URL} alt="Lucenera" className="h-8 w-auto object-contain" />
           <div className="h-6 w-px bg-border hidden sm:block" />
-          <h1 className="font-bold text-lg hidden sm:block">Separação Parcial</h1>
+          <h1 className="font-bold text-lg hidden sm:block">Venda Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
           {podeTrocar && (
@@ -1142,7 +1204,7 @@ export default function SeparacaoParcialPage() {
                       {/* SPEC-138 (Prompt 5): coluna de ação fixa à direita
                           dentro do overflow-x-auto — evita rolar até o fim
                           pra alcançar o botão "Trocar". */}
-                      {podeTrocar && (
+                      {temAcoes && (
                         <TableHead className="sticky right-0 !z-30 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]" />
                       )}
                     </TableRow>
@@ -1151,7 +1213,7 @@ export default function SeparacaoParcialPage() {
                     {termoItem && itensVisiveis.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={podeTrocar ? 14 : 13}
+                          colSpan={temAcoes ? 14 : 13}
                           className="text-center text-sm text-muted-foreground py-6"
                         >
                           Nenhum item desta venda encontrado com "{buscaItem.trim()}".
@@ -1234,12 +1296,12 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_entregue}
                         </TableCell>
-                        {podeTrocar && (
-                          <TableCell className="sticky right-0 bg-card group-hover:bg-sky-100 group-focus-within:bg-sky-200 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]">
+                        {temAcoes && (
+                          <TableCell className="sticky right-0 bg-card group-hover:bg-sky-100 group-focus-within:bg-sky-200 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)] whitespace-nowrap">
                             {/* SPEC-149: o botão parte de quem PRECISA da
                                 peça (saldo pendente em Entrega Futura), não
                                 mais de quem já tem a reserva. */}
-                            {item.q_entrega_futura > 0 && (
+                            {podeTrocar && item.q_entrega_futura > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1248,6 +1310,17 @@ export default function SeparacaoParcialPage() {
                               >
                                 <ArrowLeftRight className="w-4 h-4 mr-1" />
                                 Trocar
+                              </Button>
+                            )}
+                            {podeAjustar && (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Ajustar: passar entre Reserva e Entrega Futura dentro desta venda"
+                                onClick={() => handleAbrirAjuste(item)}
+                              >
+                                <ArrowUpDown className="w-4 h-4 mr-1" />
+                                Ajustar
                               </Button>
                             )}
                           </TableCell>
@@ -1288,7 +1361,7 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm px-2">
                           {totaisVisiveis.q_entregue}
                         </TableCell>
-                        {podeTrocar && <TableCell className="sticky right-0 bg-muted/50" />}
+                        {temAcoes && <TableCell className="sticky right-0 bg-muted/50" />}
                       </TableRow>
                     </TableFooter>
                   )}
@@ -1944,6 +2017,81 @@ export default function SeparacaoParcialPage() {
             >
               {trocando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Confirmar troca
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-235 B: Reserva <-> Entrega Futura dentro desta venda (só Matheus/admin) */}
+      <Dialog open={!!ajusteItem} onOpenChange={(open) => !open && !ajustando && setAjusteItem(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Ajustar Reserva / Entrega Futura</DialogTitle>
+          </DialogHeader>
+          {ajusteItem && (
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="font-semibold">
+                  {ajusteItem.codigo ?? '-'} — {ajusteItem.descricao || '-'}
+                </div>
+                <div className="text-muted-foreground">
+                  L {ajusteItem.classificacao || '-'} · Reserva {ajusteItem.q_reserva} · Entrega Futura{' '}
+                  {ajusteItem.q_entrega_futura}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={ajusteAcao === 'reserva_para_entrega_futura' ? 'default' : 'outline'}
+                  disabled={ajusteItem.q_reserva <= 0}
+                  onClick={() => setAjusteAcao('reserva_para_entrega_futura')}
+                >
+                  Reserva → Entrega Futura
+                </Button>
+                <Button
+                  type="button"
+                  variant={ajusteAcao === 'entrega_futura_para_reserva' ? 'default' : 'outline'}
+                  disabled={ajusteItem.q_entrega_futura <= 0}
+                  onClick={() => setAjusteAcao('entrega_futura_para_reserva')}
+                >
+                  Entrega Futura → Reserva
+                </Button>
+              </div>
+              <div className="space-y-1">
+                <label className="font-medium">Quantidade (máx. {ajusteMax})</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={ajusteMax}
+                  step="1"
+                  value={ajusteQuantidade}
+                  onChange={(e) => setAjusteQuantidade(e.target.value)}
+                  className="w-32"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-medium">Motivo</label>
+                <Textarea
+                  value={ajusteMotivo}
+                  onChange={(e) => setAjusteMotivo(e.target.value)}
+                  placeholder="Ex.: cliente pediu para segurar esta peça"
+                  rows={2}
+                />
+              </div>
+              {ajusteAcao === 'entrega_futura_para_reserva' && (
+                <p className="text-xs text-muted-foreground">
+                  Só reserva se houver peça livre no Estoque Geral (sem reserva de ninguém).
+                </p>
+              )}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAjusteItem(null)} disabled={ajustando}>
+              Cancelar
+            </Button>
+            <Button onClick={handleConfirmarAjuste} disabled={ajustando || !ajusteQuantidade || !ajusteMotivo.trim()}>
+              {ajustando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Confirmar
             </Button>
           </DialogFooter>
         </DialogContent>
