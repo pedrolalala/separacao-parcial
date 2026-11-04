@@ -37,6 +37,7 @@ import {
   TableFooter,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/AuthContext'
@@ -325,6 +326,9 @@ function imprimirListaSeparacao(params: {
 export default function SeparacaoParcialPage() {
   const { user, signOut } = useAuth()
   const [vendasDisponiveis, setVendasDisponiveis] = useState<VendaDisponivel[]>([])
+  // SPEC-243: segunda lista = vendas da Connect (histórico herdado, somente consulta)
+  const [vendasConnect, setVendasConnect] = useState<VendaDisponivel[]>([])
+  const [aba, setAba] = useState<'sistema' | 'connect'>('sistema')
   const [carregandoVendas, setCarregandoVendas] = useState(true)
   const [filtro, setFiltro] = useState('')
   const [numeroVenda, setNumeroVenda] = useState('')
@@ -350,7 +354,13 @@ export default function SeparacaoParcialPage() {
       .then(({ data }) => setMeuNome((data as any)?.nome ?? ''))
   }, [user?.id])
   const [itensParaSeparar, setItensParaSeparar] = useState<
-    { projetoItemId: string; produtoId: string | null; descricao: string | null; quantidade: number }[] | null
+    | {
+        projetoItemId: string
+        produtoId: string | null
+        descricao: string | null
+        quantidade: number
+      }[]
+    | null
   >(null)
   // Achado no teste de ponta a ponta 13-14/08: se a venda ficar sem
   // reserva SEM que dataEntrega tenha sido preenchida na mesma ação (ou a
@@ -418,8 +428,11 @@ export default function SeparacaoParcialPage() {
   // operacional (aprovadas e com projeto_itens) pra virar um seletor de
   // busca em vez de um campo de texto cego.
   useEffect(() => {
-    listarVendasDisponiveis()
-      .then(setVendasDisponiveis)
+    Promise.all([listarVendasDisponiveis('sistema'), listarVendasDisponiveis('connect')])
+      .then(([sistema, connect]) => {
+        setVendasDisponiveis(sistema)
+        setVendasConnect(connect)
+      })
       .catch((err) =>
         toast.error('Erro ao carregar lista de vendas', { description: err?.message }),
       )
@@ -435,20 +448,26 @@ export default function SeparacaoParcialPage() {
       .catch(() => setPodeAjustar(false))
   }, [])
 
-  const temAcoes = podeTrocar || podeAjustar
+  // SPEC-243: venda herdada da Connect é só consulta — separar/ajustar/trocar mexeriam em saldo (SPEC-232); o tratamento
+  // da herança (entregar, voltar ao estoque) é a fase 2, só Matheus/administração.
+  const somenteConsulta = venda?.origem === 'connect'
+  const temAcoes = (podeTrocar || podeAjustar) && !somenteConsulta
 
   const vendasFiltradas = useMemo(() => {
     const termo = filtro.trim().toLowerCase()
-    if (!termo) return vendasDisponiveis
-    return vendasDisponiveis.filter(
+    const base = aba === 'connect' ? vendasConnect : vendasDisponiveis
+    if (!termo) return base
+    return base.filter(
       (v) =>
         v.orcamentoNumero.toLowerCase().includes(termo) ||
         (v.vendaNumero || '').toLowerCase().includes(termo) ||
         (v.clienteNome || '').toLowerCase().includes(termo) ||
         (v.projetoCodigo || '').toLowerCase().includes(termo) ||
-        (v.empresaNome || '').toLowerCase().includes(termo),
+        (v.empresaNome || '').toLowerCase().includes(termo) ||
+        (v.equipeNome || '').toLowerCase().includes(termo) ||
+        (v.vendedorNome || '').toLowerCase().includes(termo),
     )
-  }, [vendasDisponiveis, filtro])
+  }, [vendasDisponiveis, vendasConnect, aba, filtro])
 
   // SPEC-092: unifica o código exibido da "parcial" com o código da venda
   // (antes era um fragmento de UUID sem relação nenhuma com o número da
@@ -513,8 +532,7 @@ export default function SeparacaoParcialPage() {
     if (!venda || !termoItem) return 0
     const visiveis = new Set(itensVisiveis.map((i) => i.projeto_item_id))
     return venda.itens.filter(
-      (i) =>
-        !visiveis.has(i.projeto_item_id) && (Number(quantidades[i.projeto_item_id]) || 0) > 0,
+      (i) => !visiveis.has(i.projeto_item_id) && (Number(quantidades[i.projeto_item_id]) || 0) > 0,
     ).length
   }, [venda, termoItem, itensVisiveis, quantidades])
 
@@ -576,6 +594,7 @@ export default function SeparacaoParcialPage() {
   }
 
   const handleSeparar = async () => {
+    if (somenteConsulta) return // SPEC-243: venda da Connect é só consulta
     if (!venda) return
 
     const itens = venda.itens
@@ -884,7 +903,8 @@ export default function SeparacaoParcialPage() {
     try {
       const rows = await getReservasOutrosProjetos(item.produto_id, item.projeto_item_id)
       // SPEC-222 E1: L da própria venda primeiro (troca dentro do mesmo cliente)
-      const mesma = (r: { orcamentoId: string | null }) => (r.orcamentoId && r.orcamentoId === venda?.orcamentoId ? 0 : 1)
+      const mesma = (r: { orcamentoId: string | null }) =>
+        r.orcamentoId && r.orcamentoId === venda?.orcamentoId ? 0 : 1
       setReservasOutras([...rows].sort((a, b) => mesma(a) - mesma(b)))
     } catch (err: any) {
       toast.error('Erro ao buscar outras reservas desta peça', { description: err?.message })
@@ -939,7 +959,9 @@ export default function SeparacaoParcialPage() {
 
   const handleAbrirAjuste = (item: ItemVenda) => {
     setAjusteItem(item)
-    setAjusteAcao(item.q_reserva > 0 ? 'reserva_para_entrega_futura' : 'entrega_futura_para_reserva')
+    setAjusteAcao(
+      item.q_reserva > 0 ? 'reserva_para_entrega_futura' : 'entrega_futura_para_reserva',
+    )
     setAjusteQuantidade('')
     setAjusteMotivo('')
   }
@@ -1032,6 +1054,29 @@ export default function SeparacaoParcialPage() {
       <main className="flex-1 p-4 sm:p-6 pr-16 sm:pr-20 flex flex-col gap-4 w-full">
         {!venda ? (
           <div className="bg-card border rounded-xl p-4">
+            {/* SPEC-243: duas visões — vendas feitas neste sistema × vendas herdadas da Connect (histórico, só consulta). */}
+            <Tabs
+              value={aba}
+              onValueChange={(v) => setAba(v as 'sistema' | 'connect')}
+              className="mb-4"
+            >
+              <TabsList>
+                <TabsTrigger value="sistema">
+                  Vendas do sistema Lucenera ({vendasDisponiveis.length})
+                </TabsTrigger>
+                <TabsTrigger value="connect">
+                  Vendas parciais Connect ({vendasConnect.length})
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            {aba === 'connect' && (
+              <p className="text-xs text-muted-foreground mb-3">
+                Histórico herdado da Connect: reserva e entrega futura por cliente. Somente consulta
+                — o tratamento (entregar, voltar ao estoque) é feito só pelo Matheus e pela
+                administração. Linhas em amarelo são vendas até junho/2025: confira se a peça ainda
+                precisa ficar reservada.
+              </p>
+            )}
             <label className="text-xs font-semibold uppercase text-muted-foreground">
               Buscar venda
             </label>
@@ -1052,8 +1097,10 @@ export default function SeparacaoParcialPage() {
               </div>
             ) : vendasFiltradas.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-10">
-                {vendasDisponiveis.length === 0
-                  ? 'Nenhuma venda aprovada com saldo encontrada.'
+                {(aba === 'connect' ? vendasConnect : vendasDisponiveis).length === 0
+                  ? aba === 'connect'
+                    ? 'Nenhuma venda da Connect encontrada para o seu acesso.'
+                    : 'Nenhuma venda aprovada com saldo encontrada.'
                   : 'Nenhuma venda encontrada com esse filtro.'}
               </p>
             ) : (
@@ -1066,8 +1113,18 @@ export default function SeparacaoParcialPage() {
                       <TableHead>Venda</TableHead>
                       <TableHead>Cliente — Projeto</TableHead>
                       <TableHead>Empresa</TableHead>
-                      <TableHead className="text-center">Data da Venda</TableHead>
-                      <TableHead className="text-center">Previsão de Entrega</TableHead>
+                      {aba === 'connect' ? (
+                        <>
+                          <TableHead>Equipe — Vendedor</TableHead>
+                          <TableHead className="text-right">Reserva</TableHead>
+                          <TableHead className="text-right">E. Futura</TableHead>
+                        </>
+                      ) : (
+                        <>
+                          <TableHead className="text-center">Data da Venda</TableHead>
+                          <TableHead className="text-center">Previsão de Entrega</TableHead>
+                        </>
+                      )}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -1075,7 +1132,7 @@ export default function SeparacaoParcialPage() {
                       <TableRow
                         key={v.orcamentoNumero}
                         onClick={() => !loading && handleLocalizar(v.orcamentoNumero)}
-                        className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''}`}
+                        className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''} ${v.vendaAntiga ? 'bg-amber-50 hover:bg-amber-100' : ''}`}
                       >
                         {/* SPEC-138 (Prompt 4): referências de orçamento/venda em
                             cor escura + semibold + leve letter-spacing, pra
@@ -1090,12 +1147,37 @@ export default function SeparacaoParcialPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-sm">{v.empresaNome || '-'}</TableCell>
-                        <TableCell className="text-sm text-center">
-                          {fmtDataCurta(v.dataVenda)}
-                        </TableCell>
-                        <TableCell className="text-sm text-center">
-                          {fmtDia(v.previsaoEntrega)}
-                        </TableCell>
+                        {aba === 'connect' ? (
+                          <>
+                            <TableCell className="text-sm whitespace-nowrap">
+                              {v.equipeNome || '-'}
+                              {v.vendedorNome && (
+                                <span className="text-muted-foreground"> — {v.vendedorNome}</span>
+                              )}
+                              {v.vendaAntiga && (
+                                <Badge
+                                  variant="outline"
+                                  className="ml-2 border-amber-500 text-amber-700"
+                                >
+                                  Até jun/2025
+                                </Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm text-right font-semibold text-emerald-700">
+                              {v.qReserva}
+                            </TableCell>
+                            <TableCell className="text-sm text-right">{v.qEntregaFutura}</TableCell>
+                          </>
+                        ) : (
+                          <>
+                            <TableCell className="text-sm text-center">
+                              {fmtDataCurta(v.dataVenda)}
+                            </TableCell>
+                            <TableCell className="text-sm text-center">
+                              {fmtDia(v.previsaoEntrega)}
+                            </TableCell>
+                          </>
+                        )}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1125,7 +1207,48 @@ export default function SeparacaoParcialPage() {
                 <span className="text-muted-foreground">Projeto: </span>
                 <span className="font-medium">{venda.projetoCodigo || '-'}</span>
               </div>
+              {somenteConsulta && (
+                <>
+                  <div>
+                    <span className="text-muted-foreground">Equipe: </span>
+                    <span className="font-medium">{venda.equipeNome || '-'}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Vendedor: </span>
+                    <span className="font-medium">{venda.vendedorNome || '-'}</span>
+                  </div>
+                  {venda.vendasVinculadasConnect.length > 0 && (
+                    <div>
+                      <span className="text-muted-foreground">Vendas vinculadas Connect: </span>
+                      <span className="font-medium">
+                        {venda.vendasVinculadasConnect.join(', ')}
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
+            {somenteConsulta && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline" className="border-sky-500 text-sky-700">
+                  Connect — somente consulta
+                </Badge>
+                {venda.vendaAntiga && (
+                  <Badge variant="outline" className="border-amber-500 text-amber-700">
+                    Venda até jun/2025 — conferir
+                  </Badge>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {venda && somenteConsulta && (
+          <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-sm text-sky-900">
+            Esta venda veio da Connect: <b>Reserva</b> e <b>Entrega Futura</b> são o que a Connect
+            tinha por cliente e por L. A quantidade <b>entregue</b> não existe na Connect (Q. Venda
+            = Reserva + Entrega Futura). Não dá para separar, ajustar nem trocar daqui; o tratamento
+            da herança é feito pelo Matheus e pela administração.
           </div>
         )}
 
@@ -1239,6 +1362,28 @@ export default function SeparacaoParcialPage() {
                         </TableCell>
                         <TableCell className="text-sm break-words min-w-[220px]">
                           {item.descricao || '-'}
+                          {item.connect && (
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs">
+                              {item.connect.dataEntrega && (
+                                <span className="text-muted-foreground">
+                                  Entrega: {fmtDia(item.connect.dataEntrega)}
+                                </span>
+                              )}
+                              {item.connect.avisoData && (
+                                <span className="text-amber-700">
+                                  Sem data de entrega (verificar na Connect)
+                                </span>
+                              )}
+                              {item.connect.observacao && (
+                                <span className="text-muted-foreground">
+                                  Obs.: {item.connect.observacao}
+                                </span>
+                              )}
+                              {item.connect.tratada && (
+                                <span className="text-emerald-700">Tratada</span>
+                              )}
+                            </div>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm whitespace-nowrap px-3">
                           {item.classificacao || '-'}
@@ -1259,7 +1404,9 @@ export default function SeparacaoParcialPage() {
                           {item.q_reserva}
                         </TableCell>
                         <TableCell className="bg-primary/5 px-2">
-                          {item.q_reserva <= 0 && item.q_ag_separar > 0 ? (
+                          {somenteConsulta ? (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          ) : item.q_reserva <= 0 && item.q_ag_separar > 0 ? (
                             <button
                               type="button"
                               onClick={scrollToParciais}
@@ -1367,19 +1514,21 @@ export default function SeparacaoParcialPage() {
                   )}
                 </Table>
               </div>
-              <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
-                <Button onClick={handleSeparar} disabled={saving}>
-                  {saving ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  ) : (
-                    <Scissors className="w-4 h-4 mr-2" />
-                  )}
-                  Separar
-                </Button>
-              </div>
+              {!somenteConsulta && (
+                <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
+                  <Button onClick={handleSeparar} disabled={saving}>
+                    {saving ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Scissors className="w-4 h-4 mr-2" />
+                    )}
+                    Separar
+                  </Button>
+                </div>
+              )}
             </div>
 
-            {precisaFinalizarManualmente && (
+            {precisaFinalizarManualmente && !somenteConsulta && (
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h2 className="font-semibold text-sm text-amber-900">
@@ -1458,7 +1607,9 @@ export default function SeparacaoParcialPage() {
                         <TableCell>
                           <Badge
                             variant={p.status === 'Cancelado' ? 'destructive' : 'outline'}
-                            className={cn(p.status === 'finalizado' && 'border-green-500 text-green-700')}
+                            className={cn(
+                              p.status === 'finalizado' && 'border-green-500 text-green-700',
+                            )}
                           >
                             {statusParcial(p.status)}
                           </Badge>
@@ -1642,7 +1793,9 @@ export default function SeparacaoParcialPage() {
                       type="date"
                       className="h-8"
                       value={formEntrega.dataEntrega}
-                      onChange={(e) => setFormEntrega({ ...formEntrega, dataEntrega: e.target.value })}
+                      onChange={(e) =>
+                        setFormEntrega({ ...formEntrega, dataEntrega: e.target.value })
+                      }
                     />
                   </label>
                   <label className="space-y-1">
@@ -1677,7 +1830,9 @@ export default function SeparacaoParcialPage() {
                       rows={2}
                       placeholder="Ex.: falar com o eletricista na chegada"
                       value={formEntrega.observacoes}
-                      onChange={(e) => setFormEntrega({ ...formEntrega, observacoes: e.target.value })}
+                      onChange={(e) =>
+                        setFormEntrega({ ...formEntrega, observacoes: e.target.value })
+                      }
                     />
                   </label>
                   <div className="flex justify-end gap-2 md:col-span-2">
@@ -1706,25 +1861,32 @@ export default function SeparacaoParcialPage() {
                     {verParcial.responsavelRecebimento || '-'}
                   </p>
                   <p className="md:col-span-2">
-                    <span className="text-muted-foreground">Endereço:</span> {verParcial.endereco || '-'}
+                    <span className="text-muted-foreground">Endereço:</span>{' '}
+                    {verParcial.endereco || '-'}
                   </p>
                   <p>
-                    <span className="text-muted-foreground">Telefone:</span> {verParcial.telefone || '-'}
+                    <span className="text-muted-foreground">Telefone:</span>{' '}
+                    {verParcial.telefone || '-'}
                   </p>
                   {verParcial.observacoes && (
                     <p className="md:col-span-2">
-                      <span className="text-muted-foreground">Observações:</span> {verParcial.observacoes}
+                      <span className="text-muted-foreground">Observações:</span>{' '}
+                      {verParcial.observacoes}
                     </p>
                   )}
                   {verParcial.entrega && (
                     <div className="md:col-span-2 mt-1 rounded-md border border-green-300 bg-green-50 p-2 text-green-900">
                       <p className="font-semibold">
                         Entregue
-                        {verParcial.entrega.dataReal ? ` em ${fmtDataHora(verParcial.entrega.dataReal)}` : ''}
+                        {verParcial.entrega.dataReal
+                          ? ` em ${fmtDataHora(verParcial.entrega.dataReal)}`
+                          : ''}
                       </p>
                       <p>
                         Recebido por: <b>{verParcial.entrega.recebidoPor || '-'}</b>
-                        {verParcial.entrega.entreguePor ? ` · entregue por ${verParcial.entrega.entreguePor}` : ''}
+                        {verParcial.entrega.entreguePor
+                          ? ` · entregue por ${verParcial.entrega.entreguePor}`
+                          : ''}
                       </p>
                       {verParcial.entrega.observacoes && <p>{verParcial.entrega.observacoes}</p>}
                     </div>
@@ -1919,7 +2081,8 @@ export default function SeparacaoParcialPage() {
                   </div>
                 ) : reservasOutras.length === 0 ? (
                   <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg">
-                    Nenhum outro L (desta venda ou de outro projeto) tem essa peça reservada no momento.
+                    Nenhum outro L (desta venda ou de outro projeto) tem essa peça reservada no
+                    momento.
                   </p>
                 ) : (
                   <div className="border rounded-lg overflow-hidden max-h-64 overflow-y-auto">
@@ -2023,7 +2186,10 @@ export default function SeparacaoParcialPage() {
       </Dialog>
 
       {/* SPEC-235 B: Reserva <-> Entrega Futura dentro desta venda (só Matheus/admin) */}
-      <Dialog open={!!ajusteItem} onOpenChange={(open) => !open && !ajustando && setAjusteItem(null)}>
+      <Dialog
+        open={!!ajusteItem}
+        onOpenChange={(open) => !open && !ajustando && setAjusteItem(null)}
+      >
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>Ajustar Reserva / Entrega Futura</DialogTitle>
@@ -2035,8 +2201,8 @@ export default function SeparacaoParcialPage() {
                   {ajusteItem.codigo ?? '-'} — {ajusteItem.descricao || '-'}
                 </div>
                 <div className="text-muted-foreground">
-                  L {ajusteItem.classificacao || '-'} · Reserva {ajusteItem.q_reserva} · Entrega Futura{' '}
-                  {ajusteItem.q_entrega_futura}
+                  L {ajusteItem.classificacao || '-'} · Reserva {ajusteItem.q_reserva} · Entrega
+                  Futura {ajusteItem.q_entrega_futura}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
@@ -2089,7 +2255,10 @@ export default function SeparacaoParcialPage() {
             <Button variant="outline" onClick={() => setAjusteItem(null)} disabled={ajustando}>
               Cancelar
             </Button>
-            <Button onClick={handleConfirmarAjuste} disabled={ajustando || !ajusteQuantidade || !ajusteMotivo.trim()}>
+            <Button
+              onClick={handleConfirmarAjuste}
+              disabled={ajustando || !ajusteQuantidade || !ajusteMotivo.trim()}
+            >
               {ajustando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Confirmar
             </Button>

@@ -22,10 +22,31 @@ export interface ItemVenda {
   q_ag_separar: number
   q_separado: number
   q_entregue: number
+  /** SPEC-243: só nas vendas da Connect — o que as planilhas Reserva/Entrega Futura trouxeram para este item. */
+  connect?: ItemConnect
 }
+
+/** SPEC-243: dados do espelho da Connect por item (L + peça) de uma venda Connect. Sem valor em dinheiro. */
+export interface ItemConnect {
+  /** menor data de entrega informada pela Connect (null = a Connect não informou) */
+  dataEntrega: string | null
+  /** há Reserva sem data de entrega: provável erro da exportação da Connect */
+  avisoData: boolean
+  observacao: string | null
+  /** alguém já tratou ("matou") esta linha na fase 2 */
+  tratada: boolean
+}
+
+export type OrigemVenda = 'sistema' | 'connect'
 
 export interface VendaInfo {
   orcamentoId: string | null
+  /** SPEC-243: 'connect' = histórico herdado da Connect (somente consulta); 'sistema' = venda feita aqui. */
+  origem: OrigemVenda
+  /** SPEC-243: números das vendas da Connect ligadas a esta venda ("Vendas vinculadas Connect"). */
+  vendasVinculadasConnect: number[]
+  /** SPEC-243: venda Connect até junho/2025 (venda ≤ 2477): pede conferência se ainda tem reserva. */
+  vendaAntiga: boolean
   orcamentoNumero: string
   // SPEC-136: numero da venda propriamente dito (VENDA-0001), distinto do
   // numero do orcamento de origem (ORC-0001) — null para orcamentos
@@ -82,84 +103,76 @@ export interface VendaDisponivel {
   empresaNome: string | null
   dataVenda: string | null
   previsaoEntrega: string | null
+  // SPEC-243: origem da venda (aba "Sistema Lucenera" × "Connect") e dados para a lista da Connect
+  origem: OrigemVenda
+  equipeNome: string | null
+  vendedorNome: string | null
+  vendasVinculadasConnect: number[]
+  vendaAntiga: boolean
+  qReserva: number
+  qEntregaFutura: number
+}
+
+// PostgREST devolve no máximo 1.000 linhas por pedido: pagina em blocos para nunca cortar a lista em silêncio.
+async function lerTudo<T>(
+  montar: (de: number, ate: number) => PromiseLike<{ data: T[] | null; error: any }>,
+): Promise<T[]> {
+  const tamanho = 1000
+  const todas: T[] = []
+  for (let de = 0; ; de += tamanho) {
+    const { data, error } = await montar(de, de + tamanho - 1)
+    if (error) throw error
+    todas.push(...(data || []))
+    if (!data || data.length < tamanho) break
+  }
+  return todas
 }
 
 // SPEC-072: a busca original exigia o usuário já saber o número exato da
 // venda, sem nenhuma forma de descobrir quais existem — lista as vendas que
 // de fato têm saldo operacional (aprovadas e com projeto_itens), pra virar
 // um seletor de busca em vez de um campo de texto cego.
-export async function listarVendasDisponiveis(): Promise<VendaDisponivel[]> {
-  const { data, error } = await supabase
-    .from('vw_estoque_saldos_projeto_item')
-    .select('orcamento_id, orcamento_numero, venda_numero, cliente_id, projeto_codigo')
-    .eq('status_operacional', 'ativo')
+export async function listarVendasDisponiveis(
+  origem: OrigemVenda = 'sistema',
+): Promise<VendaDisponivel[]> {
+  // SPEC-243: uma linha por venda, já com a origem (view vw_venda_parcial_lista, security_invoker: vale o RLS por equipe).
+  // Antes isto lia vw_estoque_saldos_projeto_item inteira (uma linha por item) e agrupava aqui; com as vendas da Connect
+  // passaria de 1.000 linhas e misturaria as duas origens.
+  const rows = await lerTudo<any>((de, ate) =>
+    supabase
+      .from('vw_venda_parcial_lista')
+      .select(
+        'orcamento_id, orcamento_numero, venda_numero, origem, cliente_nome, cliente_razao_social, projeto_codigo, empresa_nome, data_venda, previsao_entrega, equipe_nome, vendedor_nome, vendas_vinculadas_connect, venda_antiga, q_reserva, q_entrega_futura',
+      )
+      .eq('origem', origem)
+      .order('orcamento_numero', { ascending: true })
+      .range(de, ate),
+  )
 
-  if (error) throw error
-  if (!data || data.length === 0) return []
-
-  const porVenda = new Map<
-    string,
-    {
-      orcamento_id: string
-      venda_numero: string | null
-      cliente_id: string | null
-      projeto_codigo: string | null
-    }
-  >()
-  data.forEach((r: any) => {
-    if (!porVenda.has(r.orcamento_numero)) {
-      porVenda.set(r.orcamento_numero, {
-        orcamento_id: r.orcamento_id,
-        venda_numero: r.venda_numero,
-        cliente_id: r.cliente_id,
-        projeto_codigo: r.projeto_codigo,
-      })
-    }
+  return rows.map((r: any) => {
+    const nome = r.cliente_nome as string | null
+    const razao = (r.cliente_razao_social as string | null)?.trim()
+    const clienteNome = nome ? (razao && razao !== nome ? `${razao} - ${nome}` : nome) : null
+    return {
+      orcamentoId: r.orcamento_id,
+      orcamentoNumero: r.orcamento_numero,
+      vendaNumero: r.venda_numero,
+      clienteNome,
+      projetoCodigo: r.projeto_codigo,
+      empresaNome: r.empresa_nome ?? null,
+      dataVenda: r.data_venda ?? null,
+      previsaoEntrega: r.previsao_entrega ?? null,
+      origem: r.origem === 'connect' ? 'connect' : 'sistema',
+      equipeNome: r.equipe_nome ?? null,
+      vendedorNome: r.vendedor_nome ?? null,
+      vendasVinculadasConnect: Array.isArray(r.vendas_vinculadas_connect)
+        ? r.vendas_vinculadas_connect
+        : [],
+      vendaAntiga: !!r.venda_antiga,
+      qReserva: Number(r.q_reserva) || 0,
+      qEntregaFutura: Number(r.q_entrega_futura) || 0,
+    } as VendaDisponivel
   })
-
-  const clienteIds = [
-    ...new Set([...porVenda.values()].map((v) => v.cliente_id).filter(Boolean)),
-  ] as string[]
-  const { data: clientes, error: clienteError } =
-    clienteIds.length > 0
-      ? await supabase.from('contatos').select('id, nome, razao_social').in('id', clienteIds)
-      : { data: [] as any[], error: null }
-  if (clienteError) throw clienteError
-
-  const clienteMap = new Map((clientes || []).map((c: any) => [c.id, c]))
-
-  // SPEC-176: empresa da venda, data da venda (aprovação do cliente; se
-  // vazia, emissão do orçamento) e previsão de entrega.
-  const orcamentoIds = [...new Set([...porVenda.values()].map((v) => v.orcamento_id))]
-  const { data: orcamentos, error: orcamentoError } = await supabase
-    .from('orcamentos')
-    .select('id, aprovado_cliente_em, data_emissao, previsao_entrega, empresa:empresas(nome)')
-    .in('id', orcamentoIds)
-  if (orcamentoError) throw orcamentoError
-
-  const orcamentoMap = new Map((orcamentos || []).map((o: any) => [o.id, o]))
-
-  return Array.from(porVenda.entries())
-    .map(([numero, v]) => {
-      const cliente = v.cliente_id ? clienteMap.get(v.cliente_id) : null
-      const orcamento: any = orcamentoMap.get(v.orcamento_id)
-      const clienteNome = cliente
-        ? cliente.razao_social?.trim() && cliente.razao_social !== cliente.nome
-          ? `${cliente.razao_social} - ${cliente.nome}`
-          : cliente.nome
-        : null
-      return {
-        orcamentoId: v.orcamento_id,
-        orcamentoNumero: numero,
-        vendaNumero: v.venda_numero,
-        clienteNome,
-        projetoCodigo: v.projeto_codigo,
-        empresaNome: orcamento?.empresa?.nome ?? null,
-        dataVenda: orcamento?.aprovado_cliente_em || orcamento?.data_emissao || null,
-        previsaoEntrega: orcamento?.previsao_entrega ?? null,
-      }
-    })
-    .sort((a, b) => a.orcamentoNumero.localeCompare(b.orcamentoNumero))
 }
 
 export interface BoletoResumo {
@@ -260,7 +273,9 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     saldoRows[0].orcamento_id
       ? supabase
           .from('orcamentos')
-          .select('data_emissao, empresa:empresas(nome), vendedor:funcionarios(nome), equipe:equipes_projetos(equipes)')
+          .select(
+            'data_emissao, origem, vendas_vinculadas_connect, empresa:empresas(nome), vendedor:funcionarios(nome), equipe:equipes_projetos(equipes)',
+          )
           .eq('id', saldoRows[0].orcamento_id)
           .maybeSingle()
       : Promise.resolve({ data: null, error: null }),
@@ -270,6 +285,39 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
   if (produtoError) throw produtoError
   if (clienteError) throw clienteError
   if (orcamentoError) throw orcamentoError
+
+  const origem: OrigemVenda = (orcamentoRow as any)?.origem === 'connect' ? 'connect' : 'sistema'
+  let vendaAntiga = false
+  const connectPorItem = new Map<string, ItemConnect>()
+  if (origem === 'connect' && saldoRows[0].orcamento_id) {
+    // SPEC-243: o que as planilhas da Connect trouxeram por item (data de entrega, aviso de data ausente, observação).
+    const espelho = await lerTudo<any>((de, ate) =>
+      supabase
+        .from('vw_connect_reserva_ambiente')
+        .select(
+          'projeto_item_id, tipo, data_entrega, aviso_data, observacao, tratada, venda_antiga',
+        )
+        .eq('orcamento_id', saldoRows[0].orcamento_id)
+        .order('projeto_item_id', { ascending: true })
+        .range(de, ate),
+    )
+    for (const e of espelho) {
+      if (e.venda_antiga) vendaAntiga = true
+      if (!e.projeto_item_id) continue
+      const atual = connectPorItem.get(e.projeto_item_id) || {
+        dataEntrega: null,
+        avisoData: false,
+        observacao: null,
+        tratada: false,
+      }
+      if (e.data_entrega && (!atual.dataEntrega || e.data_entrega < atual.dataEntrega))
+        atual.dataEntrega = e.data_entrega
+      if (e.aviso_data) atual.avisoData = true
+      if (e.observacao && !atual.observacao) atual.observacao = e.observacao
+      if (e.tratada) atual.tratada = true
+      connectPorItem.set(e.projeto_item_id, atual)
+    }
+  }
 
   const piMap = new Map((piRows || []).map((p: any) => [p.id, p]))
   const produtoMap = new Map((produtoRows || []).map((p: any) => [p.id, p]))
@@ -293,6 +341,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       q_ag_separar: Number(r.q_ag_separar) || 0,
       q_separado: Number(r.q_separado) || 0,
       q_entregue: Number(r.q_entregue) || 0,
+      connect: connectPorItem.get(r.projeto_item_id),
     }
   })
 
@@ -305,6 +354,11 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
 
   return {
     orcamentoId: saldoRows[0].orcamento_id,
+    origem,
+    vendasVinculadasConnect: Array.isArray((orcamentoRow as any)?.vendas_vinculadas_connect)
+      ? (orcamentoRow as any).vendas_vinculadas_connect
+      : [],
+    vendaAntiga,
     orcamentoNumero: saldoRows[0].orcamento_numero,
     vendaNumero: saldoRows[0].venda_numero,
     clienteId: saldoRows[0].cliente_id,
@@ -454,7 +508,10 @@ async function enviarAnexosSeparacao(
     const ext = a.file.name.split('.').pop()?.toLowerCase() || 'bin'
     const caminho = `${codigoObra || 'sem-obra'}/${Date.now()}_${i}.${ext}`
     const { error } = await supabase.storage.from('materiais-separacao').upload(caminho, a.file)
-    if (error) throw new Error(`Separação criada, mas não foi possível enviar ${a.file.name}: ${error.message}`)
+    if (error)
+      throw new Error(
+        `Separação criada, mas não foi possível enviar ${a.file.name}: ${error.message}`,
+      )
     linhas.push({
       separacao_id: separacaoId,
       nome_arquivo: a.file.name,
@@ -466,7 +523,8 @@ async function enviarAnexosSeparacao(
     })
   }
   const { error } = await (supabase as any).from('separacao_arquivos').insert(linhas)
-  if (error) throw new Error(`Separação criada, mas os anexos não foram registrados: ${error.message}`)
+  if (error)
+    throw new Error(`Separação criada, mas os anexos não foram registrados: ${error.message}`)
 }
 
 // SPEC-089: quando a última separação de uma venda deixa tudo sem saldo em
@@ -591,7 +649,14 @@ export async function listarParciaisPorVenda(numeroVenda: string): Promise<Parci
 
 // SPEC-231 D2: as meninas corrigem endereço/observações de uma parcial já enviada, enquanto não saiu
 // para entrega (sem abrir solicitação nova). Mesmos campos que a Logística lê no cartão.
-export const STATUS_PARCIAL_EDITAVEL = ['Pendente', 'material_solicitado', 'Em separação', 'separado', 'Pronto', 'recusado']
+export const STATUS_PARCIAL_EDITAVEL = [
+  'Pendente',
+  'material_solicitado',
+  'Em separação',
+  'separado',
+  'Pronto',
+  'recusado',
+]
 
 export async function atualizarDadosEntregaParcial(
   separacaoId: string,
@@ -694,7 +759,9 @@ export async function getReservasOutrosProjetos(
   const ids = (data || []).map((r: any) => r.projeto_item_id)
   const lPorItem = new Map<string, string | null>()
   if (ids.length > 0) {
-    const { data: ls } = await (supabase.from as any)('projeto_itens').select('id, l_fixo').in('id', ids)
+    const { data: ls } = await (supabase.from as any)('projeto_itens')
+      .select('id, l_fixo')
+      .in('id', ids)
     for (const l of ls || []) lPorItem.set(l.id, l.l_fixo ?? null)
   }
 
