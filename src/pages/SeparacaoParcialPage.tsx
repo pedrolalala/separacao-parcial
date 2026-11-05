@@ -52,8 +52,16 @@ import {
   listarVendasDisponiveis,
   podeTrocarReserva,
   podeAjustarReservaVenda,
+  podeTratarHerancaConnect,
+  buscarProjetosParaLigar,
+  ligarProjetoConnect,
+  tratarHerancaConnect,
+  listarTratamentosHeranca,
   ajustarReservaVenda,
   type AjusteReservaAcao,
+  type AcaoHeranca,
+  type TratamentoHeranca,
+  type ProjetoBusca,
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
@@ -103,6 +111,15 @@ const normalizar = (t: string | null | undefined) =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+
+// SPEC-243 fase 2: o que cada ação faz no estoque (a conta é a mesma da SPEC-232)
+const ROTULO_ACAO_HERANCA: Record<string, string> = {
+  entregue_baixa_estoque: 'Já entregue (baixou o estoque)',
+  entregue_estoque_ja_ajustado: 'Já entregue (estoque já estava certo)',
+  nao_sera_entregue: 'Não será entregue (voltou a ficar disponível)',
+  mantida_confirmada: 'Mantida (venda real)',
+  observacao: 'Observação',
+}
 
 const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
 
@@ -405,6 +422,24 @@ export default function SeparacaoParcialPage() {
   const [ajusteQuantidade, setAjusteQuantidade] = useState('')
   const [ajusteMotivo, setAjusteMotivo] = useState('')
   const [ajustando, setAjustando] = useState(false)
+  // SPEC-243 fase 2: tratar a herança da Connect (só Matheus/admin, decidido no banco)
+  const [podeTratar, setPodeTratar] = useState(false)
+  const [tratItem, setTratItem] = useState<ItemVenda | null>(null)
+  const [tratAcao, setTratAcao] = useState<AcaoHeranca>('entregue_baixa_estoque')
+  const [tratSetor, setTratSetor] = useState<'reserva' | 'entrega_futura'>('reserva')
+  const [tratQuantidade, setTratQuantidade] = useState('')
+  const [tratObs, setTratObs] = useState('')
+  const [tratando, setTratando] = useState(false)
+  // SPEC-243: ligar a venda da Connect (sem projeto) a um projeto
+  const [ligarAberto, setLigarAberto] = useState(false)
+  const [ligarTermo, setLigarTermo] = useState('')
+  const [ligarResultados, setLigarResultados] = useState<ProjetoBusca[]>([])
+  const [ligarBuscando, setLigarBuscando] = useState(false)
+  const [ligarProjeto, setLigarProjeto] = useState<ProjetoBusca | null>(null)
+  const [ligarObs, setLigarObs] = useState('')
+  const [ligarAviso, setLigarAviso] = useState<{ clienteVenda: string | null; clienteProjeto: string | null } | null>(null)
+  const [ligando, setLigando] = useState(false)
+  const [tratamentos, setTratamentos] = useState<TratamentoHeranca[]>([])
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
@@ -446,12 +481,17 @@ export default function SeparacaoParcialPage() {
     podeAjustarReservaVenda()
       .then(setPodeAjustar)
       .catch(() => setPodeAjustar(false))
+    podeTratarHerancaConnect()
+      .then(setPodeTratar)
+      .catch(() => setPodeTratar(false))
   }, [])
 
   // SPEC-243: venda herdada da Connect é só consulta — separar/ajustar/trocar mexeriam em saldo (SPEC-232); o tratamento
   // da herança (entregar, voltar ao estoque) é a fase 2, só Matheus/administração.
   const somenteConsulta = venda?.origem === 'connect'
   const temAcoes = (podeTrocar || podeAjustar) && !somenteConsulta
+  // SPEC-243 fase 2: na venda da Connect a coluna de ações existe só para quem pode tratar
+  const colunaAcoes = temAcoes || (somenteConsulta && podeTratar)
 
   const vendasFiltradas = useMemo(() => {
     const termo = filtro.trim().toLowerCase()
@@ -1005,6 +1045,118 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-243: ligar a venda da Connect a um projeto
+  const handleAbrirLigar = () => {
+    setLigarTermo('')
+    setLigarResultados([])
+    setLigarProjeto(null)
+    setLigarObs('')
+    setLigarAviso(null)
+    setLigarAberto(true)
+  }
+
+  useEffect(() => {
+    if (!ligarAberto) return
+    const termo = ligarTermo.trim()
+    if (termo.length < 2) {
+      setLigarResultados([])
+      return
+    }
+    setLigarBuscando(true)
+    const t = setTimeout(() => {
+      buscarProjetosParaLigar(termo)
+        .then(setLigarResultados)
+        .catch(() => setLigarResultados([]))
+        .finally(() => setLigarBuscando(false))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [ligarTermo, ligarAberto])
+
+  const handleConfirmarLigar = async (confirmarClienteDiferente: boolean) => {
+    if (!venda?.orcamentoId || !ligarProjeto) return
+    if (!ligarObs.trim()) {
+      toast.error('A observação é obrigatória: ela registra por que esta venda é deste projeto.')
+      return
+    }
+    setLigando(true)
+    try {
+      const r = await ligarProjetoConnect({
+        orcamentoId: venda.orcamentoId,
+        projetoId: ligarProjeto.id,
+        observacao: ligarObs.trim(),
+        confirmarClienteDiferente,
+      })
+      if (!r.ligado && r.clienteDiferente) {
+        setLigarAviso({ clienteVenda: r.clienteVenda, clienteProjeto: r.clienteProjeto })
+        return
+      }
+      toast.success(`Venda ligada ao projeto ${r.projeto ?? ligarProjeto.codigo}.`)
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setLigarAberto(false)
+    } catch (err: any) {
+      toast.error('Erro ao ligar o projeto', { description: err?.message })
+    } finally {
+      setLigando(false)
+    }
+  }
+
+  // SPEC-243 fase 2: tratar a herança da Connect
+  const handleAbrirTratar = (item: ItemVenda) => {
+    setTratItem(item)
+    setTratSetor(item.q_reserva > 0 ? 'reserva' : 'entrega_futura')
+    setTratAcao(item.q_reserva > 0 ? 'entregue_baixa_estoque' : 'nao_sera_entregue')
+    setTratQuantidade('')
+    setTratObs('')
+  }
+
+  const tratSaldo = tratItem
+    ? tratSetor === 'reserva'
+      ? tratItem.q_reserva
+      : tratItem.q_entrega_futura
+    : 0
+  const tratSemQuantidade = tratAcao === 'mantida_confirmada'
+
+  const handleConfirmarTratar = async () => {
+    if (!tratItem || !venda) return
+    const quantidade = tratSemQuantidade ? null : Number(tratQuantidade)
+    if (!tratSemQuantidade && (!quantidade || quantidade <= 0 || quantidade > tratSaldo)) {
+      toast.error(`Informe uma quantidade entre 1 e ${tratSaldo}.`)
+      return
+    }
+    if (!tratObs.trim()) {
+      toast.error('A observação é obrigatória: ela registra por que a peça foi baixada.')
+      return
+    }
+    setTratando(true)
+    try {
+      await tratarHerancaConnect({
+        projetoItemId: tratItem.projeto_item_id,
+        acao: tratAcao,
+        setor: tratSetor,
+        quantidade,
+        observacao: tratObs.trim(),
+      })
+      toast.success('Tratamento registrado.')
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setTratItem(null)
+    } catch (err: any) {
+      toast.error('Erro ao tratar a herança', { description: err?.message })
+    } finally {
+      setTratando(false)
+    }
+  }
+
+  // log do que já foi tratado nesta venda (só vendas da Connect)
+  useEffect(() => {
+    if (!venda || venda.origem !== 'connect') {
+      setTratamentos([])
+      return
+    }
+    listarTratamentosHeranca(venda.itens.map((i) => i.projeto_item_id))
+      .then(setTratamentos)
+      .catch(() => setTratamentos([]))
+  }, [venda])
+
   // SPEC-098: "Log de Trocas" — histórico completo de trocas já aprovadas,
   // não só desta venda, pra ficar fácil de auditar quem fez o quê.
   const handleAbrirLog = async () => {
@@ -1145,6 +1297,11 @@ export default function SeparacaoParcialPage() {
                           {v.projetoCodigo && (
                             <span className="text-muted-foreground"> — {v.projetoCodigo}</span>
                           )}
+                          {v.origem === 'connect' && !v.projetoCodigo && (
+                            <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-amber-800">
+                              sem projeto
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm">{v.empresaNome || '-'}</TableCell>
                         {aba === 'connect' ? (
@@ -1206,6 +1363,17 @@ export default function SeparacaoParcialPage() {
               <div>
                 <span className="text-muted-foreground">Projeto: </span>
                 <span className="font-medium">{venda.projetoCodigo || '-'}</span>
+                {somenteConsulta && podeTratar && !venda.projetoCodigo && venda.orcamentoId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-2 h-6 px-2 text-xs"
+                    title="Escolher o projeto desta venda da Connect (só Matheus e administração)"
+                    onClick={() => handleAbrirLigar()}
+                  >
+                    Ligar a um projeto
+                  </Button>
+                )}
               </div>
               {somenteConsulta && (
                 <>
@@ -1255,6 +1423,33 @@ export default function SeparacaoParcialPage() {
         {loading && (
           <div className="flex items-center justify-center py-10">
             <Loader2 className="w-6 h-6 animate-spin text-primary" />
+          </div>
+        )}
+
+        {venda && somenteConsulta && tratamentos.length > 0 && (
+          <div className="bg-card border rounded-xl p-4">
+            <h2 className="font-semibold text-sm mb-2">
+              Tratamentos desta venda ({tratamentos.length})
+            </h2>
+            <div className="divide-y text-sm">
+              {tratamentos.map((t) => {
+                const item = venda.itens.find((i) => i.projeto_item_id === t.projetoItemId)
+                return (
+                  <div key={t.id} className="py-2 flex flex-wrap gap-x-4 gap-y-1">
+                    <span className="text-muted-foreground whitespace-nowrap">
+                      {new Date(t.criadoEm).toLocaleString('pt-BR')}
+                    </span>
+                    <span className="font-medium">{t.usuarioNome || '-'}</span>
+                    <span>
+                      {ROTULO_ACAO_HERANCA[t.acao] ?? t.acao}
+                      {t.quantidade != null ? ` · ${t.quantidade} un.` : ''}
+                      {item ? ` · ${item.codigo ?? '-'} (L ${item.classificacao || '-'})` : ''}
+                    </span>
+                    <span className="text-muted-foreground">Obs.: {t.observacao}</span>
+                  </div>
+                )
+              })}
+            </div>
           </div>
         )}
 
@@ -1327,7 +1522,7 @@ export default function SeparacaoParcialPage() {
                       {/* SPEC-138 (Prompt 5): coluna de ação fixa à direita
                           dentro do overflow-x-auto — evita rolar até o fim
                           pra alcançar o botão "Trocar". */}
-                      {temAcoes && (
+                      {colunaAcoes && (
                         <TableHead className="sticky right-0 !z-30 bg-card shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)]" />
                       )}
                     </TableRow>
@@ -1336,7 +1531,7 @@ export default function SeparacaoParcialPage() {
                     {termoItem && itensVisiveis.length === 0 && (
                       <TableRow>
                         <TableCell
-                          colSpan={temAcoes ? 14 : 13}
+                          colSpan={colunaAcoes ? 14 : 13}
                           className="text-center text-sm text-muted-foreground py-6"
                         >
                           Nenhum item desta venda encontrado com "{buscaItem.trim()}".
@@ -1443,12 +1638,24 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_entregue}
                         </TableCell>
-                        {temAcoes && (
+                        {colunaAcoes && (
                           <TableCell className="sticky right-0 bg-card group-hover:bg-sky-100 group-focus-within:bg-sky-200 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)] whitespace-nowrap">
+                            {somenteConsulta &&
+                              podeTratar &&
+                              (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  title="Tratar: dar como entregue, tirar da reserva ou manter (só Matheus e administração)"
+                                  onClick={() => handleAbrirTratar(item)}
+                                >
+                                  Tratar
+                                </Button>
+                              )}
                             {/* SPEC-149: o botão parte de quem PRECISA da
                                 peça (saldo pendente em Entrega Futura), não
                                 mais de quem já tem a reserva. */}
-                            {podeTrocar && item.q_entrega_futura > 0 && (
+                            {!somenteConsulta && podeTrocar && item.q_entrega_futura > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1459,17 +1666,19 @@ export default function SeparacaoParcialPage() {
                                 Trocar
                               </Button>
                             )}
-                            {podeAjustar && (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                title="Ajustar: passar entre Reserva e Entrega Futura dentro desta venda"
-                                onClick={() => handleAbrirAjuste(item)}
-                              >
-                                <ArrowUpDown className="w-4 h-4 mr-1" />
-                                Ajustar
-                              </Button>
-                            )}
+                            {!somenteConsulta &&
+                              podeAjustar &&
+                              (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  title="Ajustar: passar entre Reserva e Entrega Futura dentro desta venda"
+                                  onClick={() => handleAbrirAjuste(item)}
+                                >
+                                  <ArrowUpDown className="w-4 h-4 mr-1" />
+                                  Ajustar
+                                </Button>
+                              )}
                           </TableCell>
                         )}
                       </TableRow>
@@ -1508,7 +1717,7 @@ export default function SeparacaoParcialPage() {
                         <TableCell className="text-right text-sm px-2">
                           {totaisVisiveis.q_entregue}
                         </TableCell>
-                        {temAcoes && <TableCell className="sticky right-0 bg-muted/50" />}
+                        {colunaAcoes && <TableCell className="sticky right-0 bg-muted/50" />}
                       </TableRow>
                     </TableFooter>
                   )}
@@ -2260,6 +2469,225 @@ export default function SeparacaoParcialPage() {
               disabled={ajustando || !ajusteQuantidade || !ajusteMotivo.trim()}
             >
               {ajustando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              Confirmar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-243: ligar a venda da Connect a um projeto (só Matheus/admin). Não mexe em estoque, saldos, financeiro nem no valor do projeto. */}
+      <Dialog open={ligarAberto} onOpenChange={(open) => !open && !ligando && setLigarAberto(false)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Ligar a um projeto</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 text-sm">
+            <p className="text-muted-foreground">
+              Venda {semPrefixo(venda?.vendaNumero ?? null) || '—'} · {venda?.clienteNome || 'cliente não identificado'}. A venda e as peças passam a
+              pertencer ao projeto escolhido. Não muda estoque, saldos, financeiro nem o valor do projeto.
+            </p>
+            <div className="space-y-1">
+              <label className="font-medium">Projeto (código ou nome)</label>
+              <Input
+                value={ligarTermo}
+                onChange={(e) => {
+                  setLigarTermo(e.target.value)
+                  setLigarProjeto(null)
+                  setLigarAviso(null)
+                }}
+                placeholder="Ex.: 26.277 ou TWO ARQUITETURA"
+              />
+            </div>
+            <div className="max-h-48 overflow-y-auto rounded-lg border divide-y">
+              {ligarBuscando && <div className="p-3 text-muted-foreground">Buscando…</div>}
+              {!ligarBuscando && ligarTermo.trim().length >= 2 && ligarResultados.length === 0 && (
+                <div className="p-3 text-muted-foreground">Nenhum projeto encontrado.</div>
+              )}
+              {ligarResultados.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    setLigarProjeto(p)
+                    setLigarAviso(null)
+                  }}
+                  className={cn('w-full text-left p-2.5 hover:bg-muted/50', ligarProjeto?.id === p.id && 'bg-primary/5')}
+                >
+                  <div className="font-medium">
+                    {p.codigo} — {p.nome}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {p.clienteNome ? `Cliente: ${p.clienteNome}` : 'Projeto sem cliente'}
+                    {p.status ? ` · ${p.status}` : ''}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {ligarAviso && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                O cliente da venda ({ligarAviso.clienteVenda || '-'}) é diferente do cliente do projeto ({ligarAviso.clienteProjeto || '-'}).
+                Confirme só se a venda é mesmo deste projeto.
+              </div>
+            )}
+            <div className="space-y-1">
+              <label className="font-medium">Observação (obrigatória)</label>
+              <Textarea
+                value={ligarObs}
+                onChange={(e) => setLigarObs(e.target.value)}
+                placeholder="Ex.: confirmado com a projetista que a venda 5921 é do projeto 26.277"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLigarAberto(false)} disabled={ligando}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => handleConfirmarLigar(!!ligarAviso)}
+              disabled={ligando || !ligarProjeto || !ligarObs.trim()}
+            >
+              {ligando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {ligarAviso ? 'Confirmar mesmo assim' : 'Ligar ao projeto'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-243 fase 2: tratar a herança da Connect (só Matheus/admin). Mesma conta da SPEC-232: o reservado sempre é liberado; o Estoque Geral só baixa se a peça realmente saiu. */}
+      <Dialog open={!!tratItem} onOpenChange={(open) => !open && !tratando && setTratItem(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Tratar herança da Connect</DialogTitle>
+          </DialogHeader>
+          {tratItem && (
+            <div className="space-y-4 text-sm">
+              <div>
+                <div className="font-semibold">
+                  {tratItem.codigo ?? '-'} — {tratItem.descricao || '-'}
+                </div>
+                <div className="text-muted-foreground">
+                  L {tratItem.classificacao || '-'} · Reserva {tratItem.q_reserva} · Entrega Futura{' '}
+                  {tratItem.q_entrega_futura}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant={tratSetor === 'reserva' ? 'default' : 'outline'}
+                  disabled={tratItem.q_reserva <= 0}
+                  onClick={() => {
+                    setTratSetor('reserva')
+                    setTratAcao('entregue_baixa_estoque')
+                  }}
+                >
+                  Reserva ({tratItem.q_reserva})
+                </Button>
+                <Button
+                  type="button"
+                  variant={tratSetor === 'entrega_futura' ? 'default' : 'outline'}
+                  disabled={tratItem.q_entrega_futura <= 0}
+                  onClick={() => {
+                    setTratSetor('entrega_futura')
+                    setTratAcao('nao_sera_entregue')
+                  }}
+                >
+                  Entrega Futura ({tratItem.q_entrega_futura})
+                </Button>
+              </div>
+
+              <div className="space-y-2">
+                {(
+                  [
+                    [
+                      'entregue_baixa_estoque',
+                      'Já foi entregue — a peça saiu e o Estoque Geral ainda a conta',
+                      'Estoque Geral −{q} · Reservado −{q} · vai para Entregue',
+                    ],
+                    [
+                      'entregue_estoque_ja_ajustado',
+                      'Já foi entregue — o Estoque Geral já está certo (não mexe no estoque)',
+                      'Reservado −{q} · Estoque Geral não muda · vai para Entregue',
+                    ],
+                    [
+                      'nao_sera_entregue',
+                      'Não será mais entregue — a peça fica disponível no estoque',
+                      'Reservado −{q} · Estoque Geral não muda · a peça volta a ficar disponível',
+                    ],
+                    [
+                      'mantida_confirmada',
+                      'Manter — venda real / entrega segurada (só registrar)',
+                      'Nada muda; fica registrado com a observação',
+                    ],
+                  ] as [AcaoHeranca, string, string][]
+                )
+                  .filter(
+                    ([a]) =>
+                      tratSetor === 'reserva' ||
+                      a === 'nao_sera_entregue' ||
+                      a === 'mantida_confirmada',
+                  )
+                  .map(([a, titulo, efeito]) => (
+                    <button
+                      key={a}
+                      type="button"
+                      onClick={() => setTratAcao(a)}
+                      className={cn(
+                        'w-full text-left rounded-lg border p-3',
+                        tratAcao === a ? 'border-primary bg-primary/5' : 'hover:bg-muted/50',
+                      )}
+                    >
+                      <div className="font-medium">{titulo}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {efeito.replaceAll(
+                          '{q}',
+                          tratSemQuantidade || !tratQuantidade ? 'q' : tratQuantidade,
+                        )}
+                      </div>
+                    </button>
+                  ))}
+              </div>
+
+              {!tratSemQuantidade && (
+                <div className="space-y-1">
+                  <label className="font-medium">Quantidade (máx. {tratSaldo})</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={tratSaldo}
+                    step="1"
+                    value={tratQuantidade}
+                    onChange={(e) => setTratQuantidade(e.target.value)}
+                    className="w-32"
+                  />
+                </div>
+              )}
+
+              <div className="space-y-1">
+                <label className="font-medium">Observação (obrigatória)</label>
+                <Textarea
+                  value={tratObs}
+                  onChange={(e) => setTratObs(e.target.value)}
+                  placeholder="Ex.: eletricista levou em maio e a lista nunca foi tirada; confirmado com a projetista"
+                  rows={3}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Não gera crédito nem financeiro e não é devolução: só baixa a herança. Fica
+                registrado quem fez, quando e por quê.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTratItem(null)} disabled={tratando}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleConfirmarTratar}
+              disabled={tratando || !tratObs.trim() || (!tratSemQuantidade && !tratQuantidade)}
+            >
+              {tratando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               Confirmar
             </Button>
           </DialogFooter>

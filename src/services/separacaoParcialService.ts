@@ -724,6 +724,144 @@ export async function ajustarReservaVenda(params: {
   if (error) throw error
 }
 
+// SPEC-243 fase 2: "matar" a herança da Connect (só Matheus e administração; a regra de quem pode está no banco).
+export type AcaoHeranca =
+  | 'entregue_baixa_estoque'
+  | 'entregue_estoque_ja_ajustado'
+  | 'nao_sera_entregue'
+  | 'mantida_confirmada'
+
+export async function podeTratarHerancaConnect(): Promise<boolean> {
+  const { data, error } = await (supabase as any).rpc('pode_tratar_heranca_connect')
+  if (error) throw error
+  return !!data
+}
+
+export async function tratarHerancaConnect(params: {
+  projetoItemId: string
+  acao: AcaoHeranca
+  setor: 'reserva' | 'entrega_futura'
+  quantidade: number | null
+  observacao: string
+}): Promise<void> {
+  const { error } = await (supabase as any).rpc('tratar_heranca_connect', {
+    p_projeto_item_id: params.projetoItemId,
+    p_acao: params.acao,
+    p_setor: params.setor,
+    p_quantidade: params.quantidade,
+    p_observacao: params.observacao,
+  })
+  if (error) throw error
+}
+
+// SPEC-243: ligar a um projeto a venda da Connect que entrou sem projeto (só Matheus e administração; a regra de quem pode está no banco).
+export interface ProjetoBusca {
+  id: string
+  codigo: string
+  nome: string
+  status: string | null
+  clienteNome: string | null
+}
+
+export async function buscarProjetosParaLigar(texto: string): Promise<ProjetoBusca[]> {
+  const t = texto.trim().replace(/[%,()*]/g, ' ').trim()
+  if (t.length < 2) return []
+  const { data, error } = await (supabase as any)
+    .from('projetos')
+    .select('id, codigo, nome, status, cliente_id')
+    .or(`codigo.ilike.%${t}%,nome.ilike.%${t}%`)
+    .order('codigo')
+    .limit(20)
+  if (error) throw error
+  const linhas = (data || []) as any[]
+  const clienteIds = [...new Set(linhas.map((l) => l.cliente_id).filter(Boolean))] as string[]
+  const nomes = new Map<string, string>()
+  if (clienteIds.length > 0) {
+    const { data: cs } = await supabase.from('contatos').select('id, nome').in('id', clienteIds)
+    ;(cs || []).forEach((c: any) => nomes.set(c.id, c.nome))
+  }
+  return linhas.map((l) => ({
+    id: l.id,
+    codigo: l.codigo,
+    nome: l.nome,
+    status: l.status ?? null,
+    clienteNome: l.cliente_id ? (nomes.get(l.cliente_id) ?? null) : null,
+  }))
+}
+
+export interface ResultadoLigarProjeto {
+  ligado: boolean
+  clienteDiferente: boolean
+  clienteVenda: string | null
+  clienteProjeto: string | null
+  projeto: string | null
+}
+
+export async function ligarProjetoConnect(params: {
+  orcamentoId: string
+  projetoId: string
+  observacao: string
+  confirmarClienteDiferente: boolean
+}): Promise<ResultadoLigarProjeto> {
+  const { data, error } = await (supabase as any).rpc('ligar_projeto_connect', {
+    p_orcamento_id: params.orcamentoId,
+    p_projeto_id: params.projetoId,
+    p_observacao: params.observacao,
+    p_confirmar_cliente_diferente: params.confirmarClienteDiferente,
+  })
+  if (error) throw error
+  return {
+    ligado: !!data?.ligado,
+    clienteDiferente: !!data?.cliente_diferente,
+    clienteVenda: data?.cliente_venda ?? null,
+    clienteProjeto: data?.cliente_projeto ?? null,
+    projeto: data?.projeto ?? null,
+  }
+}
+
+export interface TratamentoHeranca {
+  id: string
+  projetoItemId: string | null
+  acao: string
+  setor: string | null
+  quantidade: number | null
+  observacao: string
+  criadoEm: string
+  usuarioNome: string | null
+}
+
+// Log do que já foi tratado nesta venda (quem, quando, por quê). Lê em blocos para não estourar o tamanho da URL.
+export async function listarTratamentosHeranca(
+  projetoItemIds: string[],
+): Promise<TratamentoHeranca[]> {
+  const linhas: any[] = []
+  for (let i = 0; i < projetoItemIds.length; i += 50) {
+    const { data, error } = await (supabase as any)
+      .from('connect_reserva_tratamento')
+      .select('id, projeto_item_id, acao, setor, quantidade, observacao, criado_em, usuario_id')
+      .in('projeto_item_id', projetoItemIds.slice(i, i + 50))
+      .order('criado_em', { ascending: false })
+    if (error) throw error
+    linhas.push(...(data || []))
+  }
+  if (linhas.length === 0) return []
+  const usuarioIds = [...new Set(linhas.map((l) => l.usuario_id).filter(Boolean))] as string[]
+  const { data: usuarios } = await supabase.from('usuarios').select('id, nome').in('id', usuarioIds)
+  const nomes = new Map((usuarios || []).map((u: any) => [u.id, u.nome]))
+  return linhas
+    .sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em)))
+    .map((l) => ({
+      id: l.id,
+      projetoItemId: l.projeto_item_id,
+      acao: l.acao,
+      setor: l.setor,
+      quantidade: l.quantidade == null ? null : Number(l.quantidade),
+      observacao: l.observacao,
+      criadoEm: l.criado_em,
+      usuarioNome: nomes.get(l.usuario_id) ?? null,
+    }))
+}
+
 // SPEC-098: mesma informação do card de peça do Cadastro Lucenera (SPEC-049)
 // — "Reservado por Cliente/Projeto" — lendo a mesma view já em produção
 // (vw_cadastro_produto_reserva_detalhe), filtrada por produto e excluindo o
