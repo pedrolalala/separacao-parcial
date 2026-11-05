@@ -771,7 +771,7 @@ export async function tratarHerancaConnect(params: {
   if (error) throw error
 }
 
-// SPEC-243: ligar a um projeto a venda da Connect que entrou sem projeto (só Matheus e administração; a regra de quem pode está no banco).
+// SPEC-243: ligar a um projeto a venda da Connect que entrou sem projeto (qualquer pessoa com acesso à Venda Parcial, só vendas da própria equipe; a regra está no banco).
 export interface ProjetoBusca {
   id: string
   codigo: string

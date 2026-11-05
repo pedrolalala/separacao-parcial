@@ -1366,12 +1366,12 @@ export default function SeparacaoParcialPage() {
               <div>
                 <span className="text-muted-foreground">Projeto: </span>
                 <span className="font-medium">{venda.projetoCodigo || '-'}</span>
-                {ehConnect && podeTratar && !venda.projetoCodigo && venda.orcamentoId && (
+                {ehConnect && !venda.projetoCodigo && venda.orcamentoId && (
                   <Button
                     variant="outline"
                     size="sm"
                     className="ml-2 h-6 px-2 text-xs"
-                    title="Escolher o projeto desta venda da Connect (só Matheus e administração)"
+                    title="Escolher o projeto desta venda da Connect"
                     onClick={() => handleAbrirLigar()}
                   >
                     Ligar a um projeto
@@ -2497,7 +2497,7 @@ export default function SeparacaoParcialPage() {
         </DialogContent>
       </Dialog>
 
-      {/* SPEC-243: ligar a venda da Connect a um projeto (só Matheus/admin). Não mexe em estoque, saldos, financeiro nem no valor do projeto. */}
+      {/* SPEC-243: ligar a venda da Connect a um projeto (qualquer pessoa com acesso à Venda Parcial, dentro da própria equipe). Não mexe em estoque, saldos, financeiro nem no valor do projeto. */}
       <Dialog open={ligarAberto} onOpenChange={(open) => !open && !ligando && setLigarAberto(false)}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
