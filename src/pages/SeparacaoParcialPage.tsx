@@ -486,12 +486,15 @@ export default function SeparacaoParcialPage() {
       .catch(() => setPodeTratar(false))
   }, [])
 
-  // SPEC-243: venda herdada da Connect é só consulta — separar/ajustar/trocar mexeriam em saldo (SPEC-232); o tratamento
-  // da herança (entregar, voltar ao estoque) é a fase 2, só Matheus/administração.
-  const somenteConsulta = venda?.origem === 'connect'
-  const temAcoes = (podeTrocar || podeAjustar) && !somenteConsulta
+  // SPEC-244 (operação em paralelo com a Connect): venda herdada da Connect. Os itens "sem data de entrega" na Connect (ou que já receberam da NF) são
+  // liberados para as equipes pedirem a separação pelo mesmo fluxo da venda do sistema (item.liberado, decidido no banco); os demais seguem só para
+  // consulta. Trocar/Ajustar continuam só nas vendas do sistema; o tratamento da herança (botão Tratar) é do Matheus e da administração.
+  const ehConnect = venda?.origem === 'connect'
+  const temItemLiberado = !!venda?.itens.some((i) => i.liberado && i.q_reserva > 0)
+  const somenteConsulta = ehConnect && !temItemLiberado
+  const temAcoes = (podeTrocar || podeAjustar) && !ehConnect
   // SPEC-243 fase 2: na venda da Connect a coluna de ações existe só para quem pode tratar
-  const colunaAcoes = temAcoes || (somenteConsulta && podeTratar)
+  const colunaAcoes = temAcoes || (ehConnect && podeTratar)
 
   const vendasFiltradas = useMemo(() => {
     const termo = filtro.trim().toLowerCase()
@@ -642,7 +645,7 @@ export default function SeparacaoParcialPage() {
         projetoItemId: item.projeto_item_id,
         produtoId: item.produto_id,
         descricao: item.descricao,
-        quantidade: Number(quantidades[item.projeto_item_id]) || 0,
+        quantidade: item.liberado ? Number(quantidades[item.projeto_item_id]) || 0 : 0,
       }))
       .filter((i) => i.quantidade > 0)
 
@@ -1363,7 +1366,7 @@ export default function SeparacaoParcialPage() {
               <div>
                 <span className="text-muted-foreground">Projeto: </span>
                 <span className="font-medium">{venda.projetoCodigo || '-'}</span>
-                {somenteConsulta && podeTratar && !venda.projetoCodigo && venda.orcamentoId && (
+                {ehConnect && podeTratar && !venda.projetoCodigo && venda.orcamentoId && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -1375,7 +1378,7 @@ export default function SeparacaoParcialPage() {
                   </Button>
                 )}
               </div>
-              {somenteConsulta && (
+              {ehConnect && (
                 <>
                   <div>
                     <span className="text-muted-foreground">Equipe: </span>
@@ -1396,10 +1399,10 @@ export default function SeparacaoParcialPage() {
                 </>
               )}
             </div>
-            {somenteConsulta && (
+            {ehConnect && (
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline" className="border-sky-500 text-sky-700">
-                  Connect — somente consulta
+                  {somenteConsulta ? 'Connect — somente consulta' : 'Connect — herança em paralelo'}
                 </Badge>
                 {venda.vendaAntiga && (
                   <Badge variant="outline" className="border-amber-500 text-amber-700">
@@ -1411,12 +1414,26 @@ export default function SeparacaoParcialPage() {
           </div>
         )}
 
-        {venda && somenteConsulta && (
+        {venda && ehConnect && (
           <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 text-sm text-sky-900">
             Esta venda veio da Connect: <b>Reserva</b> e <b>Entrega Futura</b> são o que a Connect
             tinha por cliente e por L. A quantidade <b>entregue</b> não existe na Connect (Q. Venda
-            = Reserva + Entrega Futura). Não dá para separar, ajustar nem trocar daqui; o tratamento
-            da herança é feito pelo Matheus e pela administração.
+            = Reserva + Entrega Futura).{' '}
+            {temItemLiberado ? (
+              <>
+                Os itens <b>sem data de entrega</b> na Connect (e o que já chegou pela nota fiscal)
+                estão liberados para separar aqui, igual às vendas do sistema; separar tira da
+                Reserva e o Estoque Geral baixa quando a entrega é finalizada. Os itens com data de
+                entrega definida na Connect seguem só para consulta. Ajustar e trocar não valem para
+                a Connect; o tratamento da herança é do Matheus e da administração.
+              </>
+            ) : (
+              <>
+                Nenhum item desta venda está liberado para separar aqui (todos têm data de entrega
+                definida na Connect ou ainda estão em Entrega Futura). O tratamento da herança é
+                feito pelo Matheus e pela administração.
+              </>
+            )}
           </div>
         )}
 
@@ -1426,7 +1443,7 @@ export default function SeparacaoParcialPage() {
           </div>
         )}
 
-        {venda && somenteConsulta && tratamentos.length > 0 && (
+        {venda && ehConnect && tratamentos.length > 0 && (
           <div className="bg-card border rounded-xl p-4">
             <h2 className="font-semibold text-sm mb-2">
               Tratamentos desta venda ({tratamentos.length})
@@ -1599,8 +1616,13 @@ export default function SeparacaoParcialPage() {
                           {item.q_reserva}
                         </TableCell>
                         <TableCell className="bg-primary/5 px-2">
-                          {somenteConsulta ? (
-                            <span className="text-xs text-muted-foreground">—</span>
+                          {!item.liberado ? (
+                            <span
+                              className="text-xs text-muted-foreground"
+                              title={ehConnect ? 'Tem data de entrega definida na Connect: segue na Connect' : undefined}
+                            >
+                              —
+                            </span>
                           ) : item.q_reserva <= 0 && item.q_ag_separar > 0 ? (
                             <button
                               type="button"
@@ -1640,7 +1662,7 @@ export default function SeparacaoParcialPage() {
                         </TableCell>
                         {colunaAcoes && (
                           <TableCell className="sticky right-0 bg-card group-hover:bg-sky-100 group-focus-within:bg-sky-200 shadow-[-4px_0_4px_-4px_rgba(0,0,0,0.15)] whitespace-nowrap">
-                            {somenteConsulta &&
+                            {ehConnect &&
                               podeTratar &&
                               (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
                                 <Button
@@ -1655,7 +1677,7 @@ export default function SeparacaoParcialPage() {
                             {/* SPEC-149: o botão parte de quem PRECISA da
                                 peça (saldo pendente em Entrega Futura), não
                                 mais de quem já tem a reserva. */}
-                            {!somenteConsulta && podeTrocar && item.q_entrega_futura > 0 && (
+                            {!ehConnect && podeTrocar && item.q_entrega_futura > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1666,7 +1688,7 @@ export default function SeparacaoParcialPage() {
                                 Trocar
                               </Button>
                             )}
-                            {!somenteConsulta &&
+                            {!ehConnect &&
                               podeAjustar &&
                               (item.q_reserva > 0 || item.q_entrega_futura > 0) && (
                                 <Button

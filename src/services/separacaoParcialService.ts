@@ -24,6 +24,9 @@ export interface ItemVenda {
   q_entregue: number
   /** SPEC-243: só nas vendas da Connect — o que as planilhas Reserva/Entrega Futura trouxeram para este item. */
   connect?: ItemConnect
+  /** SPEC-244 (operação em paralelo): venda do sistema = sempre true; venda da Connect = true só para o que está "sem data de entrega" na
+   *  Connect (ou já recebeu da NF). Os demais itens da Connect seguem só para consulta aqui. */
+  liberado: boolean
 }
 
 /** SPEC-243: dados do espelho da Connect por item (L + peça) de uma venda Connect. Sem valor em dinheiro. */
@@ -319,6 +322,19 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     }
   }
 
+  // SPEC-244: quais itens da Connect já podem ser separados aqui (a regra mora no banco: connect_itens_liberados).
+  const liberadosConnect = new Set<string>()
+  if (origem === 'connect') {
+    const ids = saldoRows.map((r: any) => r.projeto_item_id as string)
+    for (let i = 0; i < ids.length; i += 200) {
+      const { data, error } = await (supabase as any).rpc('connect_itens_liberados', {
+        p_projeto_item_ids: ids.slice(i, i + 200),
+      })
+      if (error) break // função ainda não existe / sem permissão: nada liberado (só consulta)
+      ;((data || []) as any[]).forEach((x) => liberadosConnect.add(typeof x === 'string' ? x : (x?.connect_itens_liberados ?? '')))
+    }
+  }
+
   const piMap = new Map((piRows || []).map((p: any) => [p.id, p]))
   const produtoMap = new Map((produtoRows || []).map((p: any) => [p.id, p]))
 
@@ -342,6 +358,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       q_separado: Number(r.q_separado) || 0,
       q_entregue: Number(r.q_entregue) || 0,
       connect: connectPorItem.get(r.projeto_item_id),
+      liberado: origem !== 'connect' || liberadosConnect.has(r.projeto_item_id),
     }
   })
 
