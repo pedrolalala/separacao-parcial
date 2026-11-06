@@ -114,6 +114,8 @@ export interface VendaDisponivel {
   vendaAntiga: boolean
   qReserva: number
   qEntregaFutura: number
+  // SPEC-252 A: venda sem nada mais a entregar (reserva, entrega futura, ag. separar e separado zerados)
+  finalizada: boolean
 }
 
 // PostgREST devolve no máximo 1.000 linhas por pedido: pagina em blocos para nunca cortar a lista em silêncio.
@@ -145,7 +147,7 @@ export async function listarVendasDisponiveis(
     supabase
       .from('vw_venda_parcial_lista')
       .select(
-        'orcamento_id, orcamento_numero, venda_numero, origem, cliente_nome, cliente_razao_social, projeto_codigo, empresa_nome, data_venda, previsao_entrega, equipe_nome, vendedor_nome, vendas_vinculadas_connect, venda_antiga, q_reserva, q_entrega_futura',
+        'orcamento_id, orcamento_numero, venda_numero, origem, cliente_nome, cliente_razao_social, projeto_codigo, empresa_nome, data_venda, previsao_entrega, equipe_nome, vendedor_nome, vendas_vinculadas_connect, venda_antiga, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue',
       )
       .eq('origem', origem)
       .order('orcamento_numero', { ascending: true })
@@ -174,6 +176,12 @@ export async function listarVendasDisponiveis(
       vendaAntiga: !!r.venda_antiga,
       qReserva: Number(r.q_reserva) || 0,
       qEntregaFutura: Number(r.q_entrega_futura) || 0,
+      finalizada:
+        (Number(r.q_reserva) || 0) <= 0 &&
+        (Number(r.q_entrega_futura) || 0) <= 0 &&
+        (Number(r.q_ag_separar) || 0) <= 0 &&
+        (Number(r.q_separado) || 0) <= 0 &&
+        (Number(r.q_entregue) || 0) > 0,
     } as VendaDisponivel
   })
 }

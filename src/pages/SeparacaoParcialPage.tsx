@@ -1009,6 +1009,21 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  // SPEC-252 C: "Separar tudo" — nunca passa da Reserva e, na venda da Connect, só entra o que está liberado (SPEC-244)
+  const handleSepararTudo = () => {
+    if (!venda) return
+    const novas: Record<string, string> = {}
+    for (const i of venda.itens) {
+      if (i.liberado && i.q_reserva > 0) novas[i.projeto_item_id] = String(i.q_reserva)
+    }
+    setQuantidades(novas)
+    const bloqueados = venda.itens.filter((i) => !i.liberado && i.q_reserva > 0).length
+    toast.info(
+      `${Object.keys(novas).length} item(ns) preenchido(s) com a Reserva. Confira e clique em Separar.` +
+        (bloqueados > 0 ? ` ${bloqueados} item(ns) com data de entrega na Connect ficaram de fora.` : ''),
+    )
+  }
+
   const handleAbrirAjuste = (item: ItemVenda) => {
     setAjusteItem(item)
     setAjusteAcao(
@@ -1306,13 +1321,18 @@ export default function SeparacaoParcialPage() {
                       <TableRow
                         key={v.orcamentoNumero}
                         onClick={() => !loading && handleLocalizar(v.orcamentoNumero)}
-                        className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''} ${v.vendaAntiga ? 'bg-amber-50 hover:bg-amber-100' : ''}`}
+                        className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''} ${v.vendaAntiga ? 'bg-amber-50 hover:bg-amber-100' : ''} ${v.finalizada ? 'bg-muted/40 text-muted-foreground opacity-60 hover:opacity-100' : ''}`}
                       >
                         {/* SPEC-138 (Prompt 4): referências de orçamento/venda em
                             cor escura + semibold + leve letter-spacing, pra
                             leitura rápida em tela de gestão. */}
                         <TableCell className="font-semibold text-[#333333] tracking-wide text-sm">
                           {semPrefixo(v.vendaNumero) || '—'}
+                          {v.finalizada && (
+                            <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-800">
+                              Finalizado
+                            </span>
+                          )}
                         </TableCell>
                         <TableCell className="text-sm whitespace-nowrap">
                           {v.clienteNome || 'Cliente não identificado'}
@@ -1803,6 +1823,22 @@ export default function SeparacaoParcialPage() {
               </div>
               {!somenteConsulta && (
                 <div className="p-4 border-t flex flex-wrap items-end justify-end gap-3">
+                  {/* SPEC-252 C: preenche a quantidade de todos os itens liberados com o que está em Reserva (não envia: confira e clique em Separar) */}
+                  <Button
+                    variant="outline"
+                    onClick={handleSepararTudo}
+                    disabled={saving || !venda.itens.some((i) => i.liberado && i.q_reserva > 0)}
+                    title="Preenche todos os itens com a quantidade em Reserva. Confira e clique em Separar."
+                  >
+                    Separar tudo
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => setQuantidades({})}
+                    disabled={saving || Object.keys(quantidades).length === 0}
+                  >
+                    Limpar
+                  </Button>
                   <Button onClick={handleSeparar} disabled={saving}>
                     {saving ? (
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
