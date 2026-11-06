@@ -442,6 +442,9 @@ export default function SeparacaoParcialPage() {
   const [tratamentos, setTratamentos] = useState<TratamentoHeranca[]>([])
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
+  const [logBusca, setLogBusca] = useState('')
+  // SPEC-251: transferências em que ESTA venda cedeu ou recebeu a peça
+  const [trocasVenda, setTrocasVenda] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
   // SPEC-182 (S1): ver o que foi em cada parcial (e reimprimir).
   const [verParcial, setVerParcial] = useState<ParcialHistorico | null>(null)
@@ -492,8 +495,9 @@ export default function SeparacaoParcialPage() {
   const ehConnect = venda?.origem === 'connect'
   const temItemLiberado = !!venda?.itens.some((i) => i.liberado && i.q_reserva > 0)
   const somenteConsulta = ehConnect && !temItemLiberado
-  const temAcoes = (podeTrocar || podeAjustar) && !ehConnect
-  // SPEC-243 fase 2: na venda da Connect a coluna de ações existe só para quem pode tratar
+  // SPEC-251: Transferir (antes "Trocar") vale também nas vendas da Connect; Ajustar continua só nas vendas do sistema
+  const temAcoes = podeTrocar || (podeAjustar && !ehConnect)
+  // SPEC-243 fase 2: na venda da Connect a coluna de ações existe para quem pode transferir ou tratar
   const colunaAcoes = temAcoes || (ehConnect && podeTratar)
 
   const vendasFiltradas = useMemo(() => {
@@ -979,22 +983,27 @@ export default function SeparacaoParcialPage() {
       toast.error('Quantidade maior que a reserva disponível do projeto escolhido.')
       return
     }
+    // SPEC-251: todo uso fica no log (quem, de quem, por quê) — o motivo é obrigatório
+    if (!trocaMotivo.trim()) {
+      toast.error('Informe o motivo da transferência.')
+      return
+    }
     setTrocando(true)
     try {
       await trocarReserva({
         origemProjetoItemId: trocaOrigemEscolhida.projetoItemId,
         destinoProjetoItemId: trocaVendaAtual.projeto_item_id,
         quantidade,
-        motivo: trocaMotivo.trim() || undefined,
+        motivo: trocaMotivo.trim(),
       })
       toast.success(
-        `${quantidade} unidade(s) trocada(s) de ${trocaOrigemEscolhida.projetoCodigo || semPrefixo(trocaOrigemEscolhida.orcamentoNumero) || 'outro projeto'} para esta venda.`,
+        `${quantidade} unidade(s) transferida(s) de ${trocaOrigemEscolhida.projetoCodigo || semPrefixo(trocaOrigemEscolhida.orcamentoNumero) || 'outro projeto'} para esta venda.`,
       )
       const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero)
       setVenda(vendaAtualizada)
       handleFecharTroca()
     } catch (err: any) {
-      toast.error('Erro ao trocar reserva', { description: err?.message })
+      toast.error('Erro ao transferir a peça', { description: err?.message })
     } finally {
       setTrocando(false)
     }
@@ -1160,10 +1169,22 @@ export default function SeparacaoParcialPage() {
       .catch(() => setTratamentos([]))
   }, [venda])
 
+  // SPEC-251: log desta venda — aparece nas DUAS vendas envolvidas (quem cedeu e quem recebeu) e em nenhuma outra
+  useEffect(() => {
+    if (!venda?.orcamentoId) {
+      setTrocasVenda([])
+      return
+    }
+    listarLogTrocas(venda.orcamentoId)
+      .then(setTrocasVenda)
+      .catch(() => setTrocasVenda([]))
+  }, [venda])
+
   // SPEC-098: "Log de Trocas" — histórico completo de trocas já aprovadas,
   // não só desta venda, pra ficar fácil de auditar quem fez o quê.
   const handleAbrirLog = async () => {
     setLogAberto(true)
+    setLogBusca('')
     setCarregandoLog(true)
     try {
       const rows = await listarLogTrocas()
@@ -1184,12 +1205,10 @@ export default function SeparacaoParcialPage() {
           <h1 className="font-bold text-lg hidden sm:block">Venda Parcial</h1>
         </div>
         <div className="flex items-center gap-3">
-          {podeTrocar && (
-            <Button variant="outline" size="sm" onClick={handleAbrirLog}>
-              <ScrollText className="w-4 h-4 mr-2" />
-              Log de Trocas
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={handleAbrirLog}>
+            <ScrollText className="w-4 h-4 mr-2" />
+            Log de Transferências
+          </Button>
           <span className="text-sm text-muted-foreground hidden sm:inline">{user?.email}</span>
           <Button variant="ghost" size="icon" asChild title="Voltar para a Central Lucenera">
             <a href="https://central-lucenera.pages.dev/dashboard">
@@ -1424,8 +1443,9 @@ export default function SeparacaoParcialPage() {
                 Os itens <b>sem data de entrega</b> na Connect (e o que já chegou pela nota fiscal)
                 estão liberados para separar aqui, igual às vendas do sistema; separar tira da
                 Reserva e o Estoque Geral baixa quando a entrega é finalizada. Os itens com data de
-                entrega definida na Connect seguem só para consulta. Ajustar e trocar não valem para
-                a Connect; o tratamento da herança é do Matheus e da administração.
+                entrega definida na Connect seguem só para consulta. Transferir peça de outra venda vale
+                aqui (lance também na Connect); Ajustar não vale; o tratamento da herança é do
+                Matheus e da administração.
               </>
             ) : (
               <>
@@ -1463,6 +1483,42 @@ export default function SeparacaoParcialPage() {
                       {item ? ` · ${item.codigo ?? '-'} (L ${item.classificacao || '-'})` : ''}
                     </span>
                     <span className="text-muted-foreground">Obs.: {t.observacao}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {venda && trocasVenda.length > 0 && (
+          <div className="bg-card border rounded-xl p-4">
+            <h2 className="font-semibold text-sm mb-2">
+              Transferências desta venda ({trocasVenda.length})
+            </h2>
+            <div className="divide-y text-sm">
+              {trocasVenda.map((t) => {
+                const cedeu = t.origemOrcamentoId === venda.orcamentoId
+                const outraVenda = cedeu ? t.destinoVendaNumero : t.origemVendaNumero
+                const outroCliente = cedeu ? t.destinoClienteNome : t.origemClienteNome
+                const outraEquipe = cedeu ? t.destinoEquipe : t.origemEquipe
+                const detalhe = [outroCliente, outraEquipe ? `equipe ${outraEquipe}` : null]
+                  .filter(Boolean)
+                  .join(', ')
+                return (
+                  <div key={t.id} className="py-2 flex flex-wrap gap-x-4 gap-y-1">
+                    <span className="text-muted-foreground whitespace-nowrap">
+                      {fmtDataHora(t.solicitadoEm)}
+                    </span>
+                    <span className="font-medium">{t.solicitanteNome || '-'}</span>
+                    <span>
+                      <b className={cedeu ? 'text-amber-700' : 'text-emerald-700'}>
+                        {cedeu ? 'Cedeu' : 'Recebeu'}
+                      </b>{' '}
+                      {t.quantidade} un. · {t.produtoCodigo ?? '-'} {t.produtoDescricao || ''}{' '}
+                      {cedeu ? 'para' : 'de'} venda {outraVenda || '-'}
+                      {detalhe ? ` (${detalhe})` : ''}
+                    </span>
+                    <span className="text-muted-foreground">Motivo: {t.motivo || '-'}</span>
                   </div>
                 )
               })}
@@ -1677,15 +1733,15 @@ export default function SeparacaoParcialPage() {
                             {/* SPEC-149: o botão parte de quem PRECISA da
                                 peça (saldo pendente em Entrega Futura), não
                                 mais de quem já tem a reserva. */}
-                            {!ehConnect && podeTrocar && item.q_entrega_futura > 0 && (
+                            {podeTrocar && item.q_entrega_futura > 0 && (
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                title="Trocar: puxar peça reservada de outro projeto para esta venda"
+                                title="Transferir: pegar a peça reservada de outra venda (de qualquer equipe) para esta venda"
                                 onClick={() => handleAbrirTroca(item)}
                               >
                                 <ArrowLeftRight className="w-4 h-4 mr-1" />
-                                Trocar
+                                Transferir
                               </Button>
                             )}
                             {!ehConnect &&
@@ -2285,7 +2341,7 @@ export default function SeparacaoParcialPage() {
       <Dialog open={!!trocaVendaAtual} onOpenChange={(open) => !open && handleFecharTroca()}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Trocar peça reservada</DialogTitle>
+            <DialogTitle>Transferir peça de outra venda</DialogTitle>
           </DialogHeader>
           {trocaVendaAtual && (
             <div className="space-y-4">
@@ -2299,6 +2355,11 @@ export default function SeparacaoParcialPage() {
                 <span className="font-semibold text-amber-700">
                   {trocaVendaAtual.q_entrega_futura}
                 </span>
+              </p>
+              <p className="text-xs rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+                Aparecem as vendas de <b>todas as equipes</b>. Priorize os clientes da sua equipe e
+                combine com a outra equipe quando precisar. A transferência fica registrada no log
+                das duas vendas. Faça a mesma transferência também na Connect.
               </p>
 
               <div>
@@ -2321,6 +2382,7 @@ export default function SeparacaoParcialPage() {
                       <TableHeader>
                         <TableRow>
                           <TableHead>Projeto</TableHead>
+                          <TableHead>Venda</TableHead>
                           <TableHead>L</TableHead>
                           <TableHead>Cliente</TableHead>
                           <TableHead>Equipe</TableHead>
@@ -2343,6 +2405,14 @@ export default function SeparacaoParcialPage() {
                               {!!r.orcamentoId && r.orcamentoId === venda?.orcamentoId && (
                                 <span className="ml-1.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
                                   esta venda
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm whitespace-nowrap">
+                              {r.vendaNumero || '-'}
+                              {r.origem === 'connect' && (
+                                <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                                  Connect
                                 </span>
                               )}
                             </TableCell>
@@ -2387,7 +2457,7 @@ export default function SeparacaoParcialPage() {
                     </div>
                     <div className="flex flex-col gap-1 flex-1 min-w-[220px]">
                       <label className="text-xs font-semibold uppercase text-muted-foreground">
-                        Motivo (opcional)
+                        Motivo *
                       </label>
                       <Input
                         value={trocaMotivo}
@@ -2407,10 +2477,10 @@ export default function SeparacaoParcialPage() {
             </Button>
             <Button
               onClick={handleConfirmarTroca}
-              disabled={trocando || !trocaOrigemEscolhida || !trocaQuantidade}
+              disabled={trocando || !trocaOrigemEscolhida || !trocaQuantidade || !trocaMotivo.trim()}
             >
               {trocando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-              Confirmar troca
+              Confirmar transferência
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2721,15 +2791,24 @@ export default function SeparacaoParcialPage() {
       <Dialog open={logAberto} onOpenChange={setLogAberto}>
         <DialogContent className="max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Log de Trocas</DialogTitle>
+            <DialogTitle>Log de Transferências</DialogTitle>
           </DialogHeader>
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={logBusca}
+              onChange={(e) => setLogBusca(e.target.value)}
+              placeholder="Buscar por cliente, venda, peça, equipe, pessoa ou motivo..."
+              className="pl-9 h-9"
+            />
+          </div>
           {carregandoLog ? (
             <div className="flex items-center justify-center py-10">
               <Loader2 className="w-6 h-6 animate-spin text-primary" />
             </div>
           ) : logTrocas.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-10">
-              Nenhuma troca registrada ainda.
+              Nenhuma transferência registrada ainda.
             </p>
           ) : (
             <div className="max-h-[60vh] overflow-y-auto border rounded-lg">
@@ -2746,7 +2825,26 @@ export default function SeparacaoParcialPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {logTrocas.map((t) => (
+                  {logTrocas
+                    .filter((t) => {
+                      const termo = logBusca.trim().toLowerCase()
+                      if (!termo) return true
+                      return [
+                        t.produtoCodigo,
+                        t.produtoDescricao,
+                        t.origemProjetoCodigo,
+                        t.origemClienteNome,
+                        t.origemVendaNumero,
+                        t.origemEquipe,
+                        t.destinoProjetoCodigo,
+                        t.destinoClienteNome,
+                        t.destinoVendaNumero,
+                        t.destinoEquipe,
+                        t.solicitanteNome,
+                        t.motivo,
+                      ].some((v) => String(v ?? '').toLowerCase().includes(termo))
+                    })
+                    .map((t) => (
                     <TableRow key={t.id}>
                       <TableCell className="text-sm">
                         <span className="font-mono font-semibold text-[#333333] tracking-wide">
@@ -2758,17 +2856,29 @@ export default function SeparacaoParcialPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-sm">
-                        {t.origemProjetoCodigo || '-'}
+                        Venda {t.origemVendaNumero || t.origemProjetoCodigo || '-'}
+                        {t.origemConnect && (
+                          <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Connect
+                          </span>
+                        )}
                         <br />
                         <span className="text-xs text-muted-foreground">
                           {t.origemClienteNome || '-'}
+                          {t.origemEquipe ? ` · ${t.origemEquipe}` : ''}
                         </span>
                       </TableCell>
                       <TableCell className="text-sm">
-                        {t.destinoProjetoCodigo || '-'}
+                        Venda {t.destinoVendaNumero || t.destinoProjetoCodigo || '-'}
+                        {t.destinoConnect && (
+                          <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-semibold text-amber-800">
+                            Connect
+                          </span>
+                        )}
                         <br />
                         <span className="text-xs text-muted-foreground">
                           {t.destinoClienteNome || '-'}
+                          {t.destinoEquipe ? ` · ${t.destinoEquipe}` : ''}
                         </span>
                       </TableCell>
                       <TableCell className="text-right text-sm font-semibold">

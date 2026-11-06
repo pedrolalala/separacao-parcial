@@ -897,6 +897,9 @@ export interface ReservaOutroProjeto {
   qVenda: number
   qReserva: number
   qEntregaFutura: number
+  // SPEC-251: número da venda e origem (sistema x Connect) para a equipe saber de onde está puxando
+  vendaNumero: string | null
+  origem: OrigemVenda
 }
 
 export async function getReservasOutrosProjetos(
@@ -920,18 +923,39 @@ export async function getReservasOutrosProjetos(
     for (const l of ls || []) lPorItem.set(l.id, l.l_fixo ?? null)
   }
 
-  return (data || []).map((r: any) => ({
-    projetoItemId: r.projeto_item_id,
-    orcamentoId: r.orcamento_id ?? null,
-    lFixo: lPorItem.get(r.projeto_item_id) ?? null,
-    projetoCodigo: r.projeto_codigo,
-    orcamentoNumero: r.orcamento_numero,
-    clienteNome: r.cliente_nome,
-    equipeNome: r.equipe_nome,
-    qVenda: Number(r.q_venda) || 0,
-    qReserva: Number(r.q_reserva) || 0,
-    qEntregaFutura: Number(r.q_entrega_futura) || 0,
-  }))
+  // SPEC-251: venda Connect sem projeto não tem equipe no projeto; completa pelo orçamento
+  const orcIds = [...new Set((data || []).map((r: any) => r.orcamento_id).filter(Boolean))] as string[]
+  const orcMap = new Map<string, { vendaNumero: string | null; origem: OrigemVenda; equipe: string | null }>()
+  if (orcIds.length > 0) {
+    const { data: orcs } = await (supabase.from as any)('orcamentos')
+      .select('id, numero_venda, origem, equipe:equipes_projetos(equipes)')
+      .in('id', orcIds)
+    for (const o of orcs || []) {
+      orcMap.set(o.id, {
+        vendaNumero: o.numero_venda != null ? String(o.numero_venda) : null,
+        origem: o.origem === 'connect' ? 'connect' : 'sistema',
+        equipe: o.equipe?.equipes ?? null,
+      })
+    }
+  }
+
+  return (data || []).map((r: any) => {
+    const o = r.orcamento_id ? orcMap.get(r.orcamento_id) : undefined
+    return {
+      projetoItemId: r.projeto_item_id,
+      orcamentoId: r.orcamento_id ?? null,
+      lFixo: lPorItem.get(r.projeto_item_id) ?? null,
+      projetoCodigo: r.projeto_codigo,
+      orcamentoNumero: r.orcamento_numero,
+      clienteNome: r.cliente_nome,
+      equipeNome: r.equipe_nome ?? o?.equipe ?? null,
+      qVenda: Number(r.q_venda) || 0,
+      qReserva: Number(r.q_reserva) || 0,
+      qEntregaFutura: Number(r.q_entrega_futura) || 0,
+      vendaNumero: o?.vendaNumero ?? null,
+      origem: o?.origem ?? 'sistema',
+    }
+  })
 }
 
 export async function trocarReserva(params: {
@@ -962,6 +986,15 @@ export interface LogTroca {
   origemClienteNome: string | null
   destinoProjetoCodigo: string | null
   destinoClienteNome: string | null
+  // SPEC-251: venda e equipe de cada lado (o log aparece nas duas vendas envolvidas)
+  origemOrcamentoId: string | null
+  origemVendaNumero: string | null
+  origemEquipe: string | null
+  origemConnect: boolean
+  destinoOrcamentoId: string | null
+  destinoVendaNumero: string | null
+  destinoEquipe: string | null
+  destinoConnect: boolean
 }
 
 // SPEC-098: "Log de Trocas" — transferencias_estoque já tem tudo (quem
@@ -971,14 +1004,29 @@ export interface LogTroca {
 // busca de nome é uma query separada, mesmo padrão já usado neste arquivo
 // para nomes de cliente.
 
-export async function listarLogTrocas(): Promise<LogTroca[]> {
-  const { data: transf, error } = await supabase
+// SPEC-251: sem argumento traz o log geral; com `orcamentoId` traz só as trocas em que essa venda cedeu OU recebeu a peça.
+export async function listarLogTrocas(orcamentoId?: string): Promise<LogTroca[]> {
+  let consulta = supabase
     .from('transferencias_estoque')
     .select(
       'id, origem_projeto_item_id, destino_projeto_item_id, quantidade, motivo, solicitado_em, solicitado_por, aprovado_por',
     )
     .eq('status', 'aprovada')
     .order('solicitado_em', { ascending: false })
+
+  if (orcamentoId) {
+    const { data: itensDaVenda, error: itensVendaError } = await supabase
+      .from('projeto_itens')
+      .select('id')
+      .eq('orcamento_id', orcamentoId)
+    if (itensVendaError) throw itensVendaError
+    const ids = (itensDaVenda || []).map((i: any) => i.id)
+    if (ids.length === 0) return []
+    consulta = consulta.or(
+      `origem_projeto_item_id.in.(${ids.join(',')}),destino_projeto_item_id.in.(${ids.join(',')})`,
+    )
+  }
+  const { data: transf, error } = await consulta
 
   if (error) throw error
   if (!transf || transf.length === 0) return []
@@ -994,7 +1042,7 @@ export async function listarLogTrocas(): Promise<LogTroca[]> {
     await Promise.all([
       supabase
         .from('vw_estoque_saldos_projeto_item')
-        .select('projeto_item_id, produto, produto_codigo, projeto_codigo, cliente_id')
+        .select('projeto_item_id, produto, produto_codigo, projeto_codigo, cliente_id, orcamento_id, venda_numero, origem')
         .in('projeto_item_id', projetoItemIds),
       usuarioIds.length > 0
         ? supabase.from('usuarios').select('id, nome').in('id', usuarioIds)
@@ -1014,6 +1062,15 @@ export async function listarLogTrocas(): Promise<LogTroca[]> {
 
   const clienteMap = new Map((clienteRows || []).map((c: any) => [c.id, c.nome]))
   const itemMap = new Map((itensRows || []).map((r: any) => [r.projeto_item_id, r]))
+  // equipe de cada venda (orçamento), para o log mostrar de qual equipe saiu e para qual foi a peça
+  const orcIdsLog = [...new Set((itensRows || []).map((r: any) => r.orcamento_id).filter(Boolean))] as string[]
+  const equipePorOrc = new Map<string, string | null>()
+  if (orcIdsLog.length > 0) {
+    const { data: orcs } = await (supabase.from as any)('orcamentos')
+      .select('id, equipe:equipes_projetos(equipes)')
+      .in('id', orcIdsLog)
+    for (const o of orcs || []) equipePorOrc.set(o.id, o.equipe?.equipes ?? null)
+  }
   const usuarioMap = new Map((usuarioRows || []).map((u: any) => [u.id, u.nome]))
 
   return transf.map((t: any) => {
@@ -1032,6 +1089,14 @@ export async function listarLogTrocas(): Promise<LogTroca[]> {
       origemClienteNome: origem?.cliente_id ? (clienteMap.get(origem.cliente_id) ?? null) : null,
       destinoProjetoCodigo: destino?.projeto_codigo ?? null,
       destinoClienteNome: destino?.cliente_id ? (clienteMap.get(destino.cliente_id) ?? null) : null,
+      origemOrcamentoId: origem?.orcamento_id ?? null,
+      origemVendaNumero: origem?.venda_numero != null ? String(origem.venda_numero) : null,
+      origemEquipe: origem?.orcamento_id ? (equipePorOrc.get(origem.orcamento_id) ?? null) : null,
+      origemConnect: origem?.origem === 'connect',
+      destinoOrcamentoId: destino?.orcamento_id ?? null,
+      destinoVendaNumero: destino?.venda_numero != null ? String(destino.venda_numero) : null,
+      destinoEquipe: destino?.orcamento_id ? (equipePorOrc.get(destino.orcamento_id) ?? null) : null,
+      destinoConnect: destino?.origem === 'connect',
     }
   })
 }
