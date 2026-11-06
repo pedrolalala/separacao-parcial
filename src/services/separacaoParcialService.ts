@@ -55,6 +55,8 @@ export interface VendaInfo {
   // numero do orcamento de origem (ORC-0001) — null para orcamentos
   // aprovados antes desta SPEC (nao foi feito backfill).
   vendaNumero: string | null
+  /** SPEC-255: rótulo do tipo quando não é venda ("Garantia", "Bonificação"...); null para venda comum. */
+  tipoOperacao: string | null
   clienteId: string | null
   clienteNome: string | null
   projetoCodigo: string | null
@@ -96,6 +98,13 @@ export interface ParcialHistorico {
   } | null
 }
 
+// SPEC-255: "GARANTIA" -> "Garantia", "USO E CONSUMO" -> "Uso e consumo"; venda comum não tem rótulo.
+export function rotuloTipoOperacao(natureza: string | null, subgrupo: string | null): string | null {
+  if (!natureza || natureza === 'venda') return null
+  const base = (subgrupo || natureza).toLowerCase()
+  return base.charAt(0).toUpperCase() + base.slice(1)
+}
+
 export interface VendaDisponivel {
   orcamentoId: string
   orcamentoNumero: string
@@ -114,6 +123,8 @@ export interface VendaDisponivel {
   vendaAntiga: boolean
   qReserva: number
   qEntregaFutura: number
+  /** SPEC-255: rótulo do tipo quando não é venda ("Garantia"...); null para venda comum. */
+  tipoOperacao: string | null
   // SPEC-252 A: venda sem nada mais a entregar (reserva, entrega futura, ag. separar e separado zerados)
   finalizada: boolean
 }
@@ -147,7 +158,7 @@ export async function listarVendasDisponiveis(
     supabase
       .from('vw_venda_parcial_lista')
       .select(
-        'orcamento_id, orcamento_numero, venda_numero, origem, cliente_nome, cliente_razao_social, projeto_codigo, empresa_nome, data_venda, previsao_entrega, equipe_nome, vendedor_nome, vendas_vinculadas_connect, venda_antiga, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue',
+        'orcamento_id, orcamento_numero, venda_numero, origem, cliente_nome, cliente_razao_social, projeto_codigo, empresa_nome, data_venda, previsao_entrega, equipe_nome, vendedor_nome, vendas_vinculadas_connect, venda_antiga, q_reserva, q_entrega_futura, q_ag_separar, q_separado, q_entregue, natureza_operacao, subgrupo',
       )
       .eq('origem', origem)
       .order('orcamento_numero', { ascending: true })
@@ -174,6 +185,7 @@ export async function listarVendasDisponiveis(
         ? r.vendas_vinculadas_connect
         : [],
       vendaAntiga: !!r.venda_antiga,
+      tipoOperacao: rotuloTipoOperacao(r.natureza_operacao ?? null, r.subgrupo ?? null),
       qReserva: Number(r.q_reserva) || 0,
       qEntregaFutura: Number(r.q_entrega_futura) || 0,
       finalizada:
@@ -328,7 +340,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       ? supabase
           .from('orcamentos')
           .select(
-            'data_emissao, origem, vendas_vinculadas_connect, empresa:empresas(nome), vendedor:funcionarios(nome), equipe:equipes_projetos(equipes)',
+            'data_emissao, origem, vendas_vinculadas_connect, natureza_operacao, subgrupo, empresa:empresas(nome), vendedor:funcionarios(nome), equipe:equipes_projetos(equipes)',
           )
           .eq('id', saldoRows[0].orcamento_id)
           .maybeSingle()
@@ -437,6 +449,10 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     dataEmissaoOrcamento: (orcamentoRow as any)?.data_emissao ?? null,
     vendedorNome: (orcamentoRow as any)?.vendedor?.nome ?? null,
     equipeNome: (orcamentoRow as any)?.equipe?.equipes ?? null,
+    tipoOperacao: rotuloTipoOperacao(
+      (orcamentoRow as any)?.natureza_operacao ?? null,
+      (orcamentoRow as any)?.subgrupo ?? null,
+    ),
     clienteCpfCnpj: (clienteRow as any)?.cpf_cnpj ?? null,
     clienteTelefone: (clienteRow as any)?.telefone || (clienteRow as any)?.celular || null,
     clienteEndereco: (clienteRow as any)?.endereco ?? null,

@@ -105,6 +105,17 @@ const fmtDia = (v: string | null) => {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(v)
 }
 
+// SPEC-255: operação sem cobrança não gera número de venda; a garantia aparece como G + número do orçamento (ORC-0005 -> G0005)
+const codigoExibicao = (
+  vendaNumero: string | null,
+  orcamentoNumero: string,
+  tipoOperacao: string | null,
+) => {
+  if (vendaNumero) return semPrefixo(vendaNumero)
+  if (tipoOperacao === 'Garantia') return `G${semPrefixo(orcamentoNumero)}`
+  return '—'
+}
+
 // SPEC-253: texto curto e detalhe (tooltip) da compra em andamento de uma peça
 const resumoPrevisao = (lista: PrevisaoChegada[] | undefined) => {
   if (!lista || lista.length === 0) {
@@ -1362,7 +1373,12 @@ export default function SeparacaoParcialPage() {
                             cor escura + semibold + leve letter-spacing, pra
                             leitura rápida em tela de gestão. */}
                         <TableCell className="font-semibold text-[#333333] tracking-wide text-sm">
-                          {semPrefixo(v.vendaNumero) || '—'}
+                          {codigoExibicao(v.vendaNumero, v.orcamentoNumero, v.tipoOperacao)}
+                          {v.tipoOperacao && (
+                            <span className="ml-1.5 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-yellow-800">
+                              {v.tipoOperacao}
+                            </span>
+                          )}
                           {v.finalizada && (
                             <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-800">
                               Finalizado
@@ -1431,7 +1447,14 @@ export default function SeparacaoParcialPage() {
                 origem — null em orçamentos aprovados antes desta SPEC.
                 SPEC-176: só a venda, sem prefixo e sem o orçamento. */}
                 <span className="text-muted-foreground">Venda: </span>
-                <span className="font-medium">{semPrefixo(venda.vendaNumero) || '—'}</span>
+                <span className="font-medium">
+                  {codigoExibicao(venda.vendaNumero, venda.orcamentoNumero, venda.tipoOperacao)}
+                </span>
+                {venda.tipoOperacao && (
+                  <span className="ml-1.5 rounded bg-yellow-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-yellow-800">
+                    {venda.tipoOperacao}
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-muted-foreground">Cliente: </span>
