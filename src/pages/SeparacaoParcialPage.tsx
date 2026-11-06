@@ -2859,6 +2859,14 @@ export default function SeparacaoParcialPage() {
                       </div>
                     </button>
                   ))}
+                {/* SPEC-252 F: entrega antiga que nunca teve lista de entrega no sistema -- a foto do estoque já é com ela entregue */}
+                {tratSetor === 'reserva' && (
+                  <p className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                    <b>Entrega antiga que nunca teve lista de entrega:</b> se a peça já saiu e o Estoque Geral já
+                    está sem ela, escolha <b>"o Estoque Geral já está certo"</b>. Escolher a primeira opção
+                    nesse caso tiraria a peça do Estoque Geral <b>duas vezes</b>. Confira na Connect antes.
+                  </p>
+                )}
               </div>
 
               {!tratSemQuantidade && (
