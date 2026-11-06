@@ -186,6 +186,49 @@ export async function listarVendasDisponiveis(
   })
 }
 
+// SPEC-253: compras em andamento por peça (vw_previsao_chegada_produto: pedido aprovado/parcialmente recebido, sem custo nem fornecedor).
+// Hoje é por PEÇA (não por venda): mostra o que está a caminho e quando, sem dizer qual venda será atendida primeiro.
+export interface PrevisaoChegada {
+  pedidoNumero: string
+  dataPrevista: string | null
+  qtdPendente: number
+}
+
+export async function listarPrevisaoChegada(
+  produtoIds: string[],
+): Promise<Map<string, PrevisaoChegada[]>> {
+  const mapa = new Map<string, PrevisaoChegada[]>()
+  const ids = [...new Set(produtoIds.filter(Boolean))]
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await (supabase.from as any)('vw_previsao_chegada_produto')
+      .select('produto_id, pedido_numero, data_prevista_entrega, qtd_pendente')
+      .in('produto_id', ids.slice(i, i + 100))
+    if (error) throw error
+    for (const r of data || []) {
+      const lista = mapa.get(r.produto_id) ?? []
+      lista.push({
+        pedidoNumero: r.pedido_numero,
+        dataPrevista: r.data_prevista_entrega ?? null,
+        qtdPendente: Number(r.qtd_pendente) || 0,
+      })
+      mapa.set(r.produto_id, lista)
+    }
+  }
+  // mais cedo primeiro; sem data por último
+  for (const lista of mapa.values()) {
+    lista.sort((a, b) =>
+      a.dataPrevista && b.dataPrevista
+        ? a.dataPrevista.localeCompare(b.dataPrevista)
+        : a.dataPrevista
+          ? -1
+          : b.dataPrevista
+            ? 1
+            : 0,
+    )
+  }
+  return mapa
+}
+
 export interface BoletoResumo {
   id: string
   nossoNumero: string

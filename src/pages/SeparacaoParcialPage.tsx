@@ -65,6 +65,8 @@ import {
   getReservasOutrosProjetos,
   trocarReserva,
   listarLogTrocas,
+  listarPrevisaoChegada,
+  type PrevisaoChegada,
   listarItensDaParcial,
   estornarItemSeparacao,
   atualizarDadosEntregaParcial,
@@ -101,6 +103,23 @@ const fmtDia = (v: string | null) => {
   if (!v) return '-'
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v)
   return m ? `${m[3]}/${m[2]}/${m[1]}` : fmtData(v)
+}
+
+// SPEC-253: texto curto e detalhe (tooltip) da compra em andamento de uma peça
+const resumoPrevisao = (lista: PrevisaoChegada[] | undefined) => {
+  if (!lista || lista.length === 0) {
+    return { curto: 'Sem compra', classe: 'text-muted-foreground', detalhe: 'Nenhum pedido de compra em andamento para esta peça.' }
+  }
+  const comData = lista.find((p) => p.dataPrevista)
+  const detalhe = lista
+    .map(
+      (p) =>
+        `Pedido ${p.pedidoNumero}: ${p.qtdPendente} un. pendente(s) · ${p.dataPrevista ? `previsão ${fmtDia(p.dataPrevista)}` : 'sem data prevista'}`,
+    )
+    .join('\n')
+  return comData
+    ? { curto: `Chega ${fmtDia(comData.dataPrevista).slice(0, 5)}`, classe: 'text-emerald-700', detalhe }
+    : { curto: 'Pedido sem data', classe: 'text-amber-700', detalhe }
 }
 
 // SPEC-176: na listagem o número aparece sem o prefixo ("VENDA-0001" → "0001");
@@ -443,6 +462,8 @@ export default function SeparacaoParcialPage() {
   const [logAberto, setLogAberto] = useState(false)
   const [logTrocas, setLogTrocas] = useState<LogTroca[]>([])
   const [logBusca, setLogBusca] = useState('')
+  // SPEC-253: compras em andamento por peça, para mostrar quando chega o que está em Entrega Futura
+  const [previsoes, setPrevisoes] = useState<Map<string, PrevisaoChegada[]>>(new Map())
   // SPEC-251: transferências em que ESTA venda cedeu ou recebeu a peça
   const [trocasVenda, setTrocasVenda] = useState<LogTroca[]>([])
   const [carregandoLog, setCarregandoLog] = useState(false)
@@ -1184,6 +1205,20 @@ export default function SeparacaoParcialPage() {
       .catch(() => setTratamentos([]))
   }, [venda])
 
+  // SPEC-253: carrega a previsão de chegada das peças desta venda que estão em Entrega Futura
+  useEffect(() => {
+    const ids = (venda?.itens ?? [])
+      .filter((i) => i.q_entrega_futura > 0 && i.produto_id)
+      .map((i) => i.produto_id as string)
+    if (ids.length === 0) {
+      setPrevisoes(new Map())
+      return
+    }
+    listarPrevisaoChegada(ids)
+      .then(setPrevisoes)
+      .catch(() => setPrevisoes(new Map()))
+  }, [venda])
+
   // SPEC-251: log desta venda — aparece nas DUAS vendas envolvidas (quem cedeu e quem recebeu) e em nenhuma outra
   useEffect(() => {
     if (!venda?.orcamentoId) {
@@ -1684,6 +1719,18 @@ export default function SeparacaoParcialPage() {
                         </TableCell>
                         <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_entrega_futura}
+                          {item.q_entrega_futura > 0 &&
+                            (() => {
+                              const r = resumoPrevisao(item.produto_id ? previsoes.get(item.produto_id) : undefined)
+                              return (
+                                <div
+                                  className={`text-[10px] font-medium leading-tight ${r.classe}`}
+                                  title={r.detalhe}
+                                >
+                                  {r.curto}
+                                </div>
+                              )
+                            })()}
                         </TableCell>
                         <TableCell className="text-right text-sm whitespace-nowrap px-2">
                           {item.q_transferida_saida}
@@ -2392,6 +2439,20 @@ export default function SeparacaoParcialPage() {
                   {trocaVendaAtual.q_entrega_futura}
                 </span>
               </p>
+              {(() => {
+                const r = resumoPrevisao(
+                  trocaVendaAtual.produto_id ? previsoes.get(trocaVendaAtual.produto_id) : undefined,
+                )
+                return (
+                  <p className="text-sm" title={r.detalhe}>
+                    Compra em andamento desta peça:{' '}
+                    <span className={`font-semibold ${r.classe}`}>{r.curto}</span>
+                    <span className="block text-xs text-muted-foreground whitespace-pre-line">
+                      {r.detalhe}
+                    </span>
+                  </p>
+                )
+              })()}
               <p className="text-xs rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
                 Aparecem as vendas de <b>todas as equipes</b>. Priorize os clientes da sua equipe e
                 combine com a outra equipe quando precisar. A transferência fica registrada no log
