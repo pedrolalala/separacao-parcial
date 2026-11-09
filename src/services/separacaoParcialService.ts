@@ -851,6 +851,16 @@ export async function tratarHerancaConnect(params: {
   if (error) throw error
 }
 
+// SPEC-267: liberar para separar os itens de Reserva de vendas da Connect que têm data de entrega (só Matheus/administração; a regra está no banco).
+export async function liberarVendasConnect(vendas: number[], motivo: string): Promise<void> {
+  const { error } = await (supabase as any).rpc('liberar_vendas_connect', {
+    p_vendas: vendas,
+    p_motivo: motivo,
+    p_aplicar: true,
+  })
+  if (error) throw error
+}
+
 // SPEC-243: ligar a um projeto a venda da Connect que entrou sem projeto (qualquer pessoa com acesso à Venda Parcial, só vendas da própria equipe; a regra está no banco).
 export interface ProjetoBusca {
   id: string

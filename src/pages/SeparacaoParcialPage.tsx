@@ -56,6 +56,7 @@ import {
   buscarProjetosParaLigar,
   ligarProjetoConnect,
   tratarHerancaConnect,
+  liberarVendasConnect,
   listarTratamentosHeranca,
   ajustarReservaVenda,
   type AjusteReservaAcao,
@@ -488,6 +489,10 @@ export default function SeparacaoParcialPage() {
   // SPEC-243 fase 2: tratar a herança da Connect (só Matheus/admin, decidido no banco)
   const [podeTratar, setPodeTratar] = useState(false)
   const [tratItem, setTratItem] = useState<ItemVenda | null>(null)
+  // SPEC-267: liberar a venda da Connect para separar (só Matheus/administração)
+  const [libAberto, setLibAberto] = useState(false)
+  const [libMotivo, setLibMotivo] = useState('')
+  const [liberando, setLiberando] = useState(false)
   const [tratAcao, setTratAcao] = useState<AcaoHeranca>('entregue_baixa_estoque')
   const [tratSetor, setTratSetor] = useState<'reserva' | 'entrega_futura'>('reserva')
   const [tratQuantidade, setTratQuantidade] = useState('')
@@ -1240,6 +1245,29 @@ export default function SeparacaoParcialPage() {
     }
   }
 
+  const itensNaoLiberados = (venda?.itens ?? []).filter((i) => !i.liberado && i.q_reserva > 0)
+  const vendasLiberar = (venda?.vendasVinculadasConnect ?? []).map(Number).filter((n) => Number.isFinite(n))
+
+  const handleConfirmarLiberar = async () => {
+    if (!venda) return
+    if (!libMotivo.trim()) {
+      toast.error('Informe o motivo da liberação.')
+      return
+    }
+    setLiberando(true)
+    try {
+      await liberarVendasConnect(vendasLiberar, libMotivo.trim())
+      toast.success('Itens liberados para separar.')
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setLibAberto(false)
+      setLibMotivo('')
+    } catch (err: any) {
+      toast.error('Erro ao liberar a venda', { description: err?.message })
+    } finally {
+      setLiberando(false)
+    }
+  }
+
   // log do que já foi tratado nesta venda (só vendas da Connect)
   useEffect(() => {
     if (!venda || venda.origem !== 'connect') {
@@ -1567,6 +1595,17 @@ export default function SeparacaoParcialPage() {
                 feito pelo Matheus e pela administração.
               </>
             )}
+          </div>
+        )}
+
+        {venda && ehConnect && podeTratar && itensNaoLiberados.length > 0 && vendasLiberar.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-sm text-amber-900 flex flex-wrap items-center gap-3">
+            <span>
+              {itensNaoLiberados.length} item(ns) desta venda têm data de entrega na Connect e não podem ser separados pela equipe.
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setLibAberto(true)}>
+              Liberar para separar
+            </Button>
           </div>
         )}
 
@@ -2791,6 +2830,41 @@ export default function SeparacaoParcialPage() {
             >
               {ligando ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               {ligarAviso ? 'Confirmar mesmo assim' : 'Ligar ao projeto'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SPEC-267: liberar venda da Connect para separar. Não mexe em estoque nem em saldos: só deixa a equipe pedir a separação. */}
+      <Dialog open={libAberto} onOpenChange={(open) => !open && !liberando && setLibAberto(false)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Liberar para separar</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p>
+              Libera os {itensNaoLiberados.length} item(ns) abaixo para a equipe pedir a separação. O estoque e a reserva não mudam.
+            </p>
+            <ul className="list-disc pl-5">
+              {itensNaoLiberados.map((i) => (
+                <li key={i.projeto_item_id}>
+                  {i.codigo ?? '-'} — {i.descricao || '-'} ({i.q_reserva})
+                </li>
+              ))}
+            </ul>
+            <Textarea
+              value={libMotivo}
+              onChange={(e) => setLibMotivo(e.target.value)}
+              placeholder="Motivo (obrigatório), ex.: entrega marcada com o cliente"
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" disabled={liberando} onClick={() => setLibAberto(false)}>
+              Cancelar
+            </Button>
+            <Button disabled={liberando} onClick={handleConfirmarLiberar}>
+              {liberando ? 'Liberando...' : 'Liberar'}
             </Button>
           </DialogFooter>
         </DialogContent>
