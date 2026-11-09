@@ -151,6 +151,36 @@ const ROTULO_ACAO_HERANCA: Record<string, string> = {
   observacao: 'Observação',
 }
 
+function enderecoEntregaPadrao(venda: {
+  clienteEndereco: string | null
+  clienteNumero: string | null
+  clienteBairro: string | null
+  clienteCidade: string | null
+  clienteEstado: string | null
+  clienteEnderecoEntrega: string | null
+  clienteNumeroEntrega: string | null
+  clienteComplementoEntrega: string | null
+  clienteBairroEntrega: string | null
+  clienteCidadeEntrega: string | null
+  clienteEstadoEntrega: string | null
+}): string {
+  const temEntrega = !!venda.clienteEnderecoEntrega?.trim()
+  const rua = temEntrega ? venda.clienteEnderecoEntrega : venda.clienteEndereco
+  const numero = temEntrega ? venda.clienteNumeroEntrega : venda.clienteNumero
+  const complemento = temEntrega ? venda.clienteComplementoEntrega : null
+  const bairro = temEntrega ? venda.clienteBairroEntrega : venda.clienteBairro
+  const cidade = temEntrega ? venda.clienteCidadeEntrega : venda.clienteCidade
+  const estado = temEntrega ? venda.clienteEstadoEntrega : venda.clienteEstado
+  return [
+    [rua, numero].filter(Boolean).join(', '),
+    complemento,
+    bairro,
+    [cidade, estado].filter(Boolean).join(' - '),
+  ]
+    .filter(Boolean)
+    .join(', ')
+}
+
 const semPrefixo = (numero: string | null) => (numero ? numero.replace(/^[A-Za-z]+-/, '') : null)
 
 // SPEC-231 D3: status da separação como aparece para as meninas (o mesmo andamento da Logística).
@@ -194,6 +224,8 @@ function imprimirListaSeparacao(params: {
   venda: VendaInfo
   numeroSeparacao: number
   dataEntregaInformada: string
+  // Endereço de entrega gravado na separação (o que o entregador vai usar); sem ele, o do cadastro.
+  enderecoEntrega?: string | null
   itensSeparados: {
     descricao: string
     codigo: number | null
@@ -248,6 +280,7 @@ function imprimirListaSeparacao(params: {
   const endereco = venda.clienteEndereco
     ? `${venda.clienteEndereco}${venda.clienteNumero ? ', ' + venda.clienteNumero : ''}`
     : '-'
+  const enderecoEntregaImpresso = params.enderecoEntrega?.trim() || ''
   const cidadeEstado = venda.clienteCidade
     ? `${venda.clienteCidade}${venda.clienteEstado ? '-' + venda.clienteEstado : ''}`
     : '-'
@@ -313,9 +346,9 @@ function imprimirListaSeparacao(params: {
         <div class="dados-cliente">
           <div><span class="rotulo">Cliente:</span> ${esc(venda.clienteNome || '-')}${venda.clienteCpfCnpj ? ' · ' + esc(venda.clienteCpfCnpj) : ''}</div>
           <div><span class="rotulo">Projeto:</span> ${esc(venda.projetoCodigo || '-')}</div>
-          <div><span class="rotulo">Endereço:</span> ${esc(endereco)}${venda.clienteBairro ? ' - ' + esc(venda.clienteBairro) : ''}</div>
+          <div><span class="rotulo">Endereço:</span> ${enderecoEntregaImpresso ? esc(enderecoEntregaImpresso) : esc(endereco) + (venda.clienteBairro ? ' - ' + esc(venda.clienteBairro) : '')}</div>
           <div><span class="rotulo">Telefone:</span> ${esc(venda.clienteTelefone || '-')}</div>
-          <div><span class="rotulo">Cidade:</span> ${esc(cidadeEstado)}</div>
+          ${enderecoEntregaImpresso ? '' : `<div><span class="rotulo">Cidade:</span> ${esc(cidadeEstado)}</div>`}
           <div><span class="rotulo">Vendedor:</span> ${esc(venda.vendedorNome || '-')}</div>
         </div>
         <table>
@@ -732,6 +765,7 @@ export default function SeparacaoParcialPage() {
         venda,
         numeroSeparacao: parciais.length + 1,
         dataEntregaInformada: dados.dataEntrega,
+        enderecoEntrega: dados.endereco,
         itensSeparados: itens.map((i) => {
           const original = venda.itens.find((v) => v.projeto_item_id === i.projetoItemId)
           return {
@@ -879,6 +913,7 @@ export default function SeparacaoParcialPage() {
       venda,
       numeroSeparacao: numerosParciais.get(verParcial.id) ?? 0,
       dataEntregaInformada: previsaoDaVenda || '',
+      enderecoEntrega: verParcial.endereco,
       itensSeparados,
     })
   }
@@ -2059,13 +2094,8 @@ export default function SeparacaoParcialPage() {
             solicitante: meuNome || user?.email || '',
             cliente: venda.clienteNome ?? '',
             telefone: venda.clienteTelefone ?? '',
-            endereco: [
-              [venda.clienteEndereco, venda.clienteNumero].filter(Boolean).join(', '),
-              venda.clienteBairro,
-              [venda.clienteCidade, venda.clienteEstado].filter(Boolean).join(' - '),
-            ]
-              .filter(Boolean)
-              .join(', '),
+            // Solicitação da Adriana (09/11): puxa o endereço de ENTREGA do cliente; sem ele, o principal.
+            endereco: enderecoEntregaPadrao(venda),
           }}
           itens={(itensParaSeparar ?? []).map((i) => ({
             descricao: i.descricao,

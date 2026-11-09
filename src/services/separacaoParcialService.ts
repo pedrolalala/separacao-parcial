@@ -75,6 +75,13 @@ export interface VendaInfo {
   clienteNumero: string | null
   clienteBairro: string | null
   clienteCidade: string | null
+  // Endereço de ENTREGA cadastrado no cliente (vazio na maioria dos cadastros)
+  clienteEnderecoEntrega: string | null
+  clienteNumeroEntrega: string | null
+  clienteComplementoEntrega: string | null
+  clienteBairroEntrega: string | null
+  clienteCidadeEntrega: string | null
+  clienteEstadoEntrega: string | null
   clienteEstado: string | null
 }
 
@@ -329,7 +336,7 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       ? supabase
           .from('contatos')
           .select(
-            'id, nome, razao_social, cpf_cnpj, telefone, celular, endereco, numero, bairro, cidade, estado',
+            'id, nome, razao_social, cpf_cnpj, telefone, celular, endereco, numero, bairro, cidade, estado, endereco_entrega, numero_entrega, complemento_entrega, bairro_entrega, cidade_entrega, estado_entrega',
           )
           .eq('id', saldoRows[0].cliente_id)
           .maybeSingle()
@@ -459,6 +466,12 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
     clienteNumero: (clienteRow as any)?.numero ?? null,
     clienteBairro: (clienteRow as any)?.bairro ?? null,
     clienteCidade: (clienteRow as any)?.cidade ?? null,
+    clienteEnderecoEntrega: (clienteRow as any)?.endereco_entrega ?? null,
+    clienteNumeroEntrega: (clienteRow as any)?.numero_entrega ?? null,
+    clienteComplementoEntrega: (clienteRow as any)?.complemento_entrega ?? null,
+    clienteBairroEntrega: (clienteRow as any)?.bairro_entrega ?? null,
+    clienteCidadeEntrega: (clienteRow as any)?.cidade_entrega ?? null,
+    clienteEstadoEntrega: (clienteRow as any)?.estado_entrega ?? null,
     clienteEstado: (clienteRow as any)?.estado ?? null,
   }
 }
