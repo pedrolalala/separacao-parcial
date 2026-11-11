@@ -1,0 +1,8 @@
+# SPEC-242 E: cabeçalhos de segurança (Cloudflare Pages). Sem CSP de scripts por enquanto (alguns sistemas
+# ainda carregam script externo); frame-ancestors impede abrir o sistema dentro de outro site (clickjacking).
+/*
+  X-Frame-Options: DENY
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000
