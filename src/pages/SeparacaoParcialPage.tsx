@@ -673,7 +673,8 @@ export default function SeparacaoParcialPage() {
     parciaisSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const handleLocalizar = async (numero: string) => {
+  // SPEC-280: a venda clicada na lista é identificada pelo orcamentoId (o número se repete entre equipes).
+  const handleLocalizar = async (numero: string, orcamentoId?: string | null) => {
     setNumeroVenda(numero)
     setLoading(true)
     setVenda(null)
@@ -681,8 +682,8 @@ export default function SeparacaoParcialPage() {
     setQuantidades({})
     try {
       const [vendaInfo, historico] = await Promise.all([
-        buscarVendaPorNumero(numero),
-        listarParciaisPorVenda(numero),
+        buscarVendaPorNumero(numero, orcamentoId),
+        listarParciaisPorVenda(numero, orcamentoId),
       ])
       if (!vendaInfo) {
         toast.error('Nenhuma venda encontrada com esse número.', {
@@ -788,8 +789,8 @@ export default function SeparacaoParcialPage() {
       // de entrega da tela — não precisa mais do finalizarSeparacaoPronta da
       // SPEC-089 quando a venda fica completa.
       const [vendaAtualizada, historico] = await Promise.all([
-        buscarVendaPorNumero(venda.orcamentoNumero),
-        listarParciaisPorVenda(venda.orcamentoNumero),
+        buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId),
+        listarParciaisPorVenda(venda.orcamentoNumero, venda.orcamentoId),
       ])
       setVenda(vendaAtualizada)
       setParciais(historico)
@@ -818,8 +819,8 @@ export default function SeparacaoParcialPage() {
       }
       toast.success('Enviada para o estoque separar — entrega criada na Logística.')
       const [vendaAtualizada, historico] = await Promise.all([
-        buscarVendaPorNumero(venda.orcamentoNumero),
-        listarParciaisPorVenda(venda.orcamentoNumero),
+        buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId),
+        listarParciaisPorVenda(venda.orcamentoNumero, venda.orcamentoId),
       ])
       setVenda(vendaAtualizada)
       setParciais(historico)
@@ -871,7 +872,7 @@ export default function SeparacaoParcialPage() {
   // Dados gerais da venda para a janela "Ver itens" (a previsão de entrega
   // vem da listagem de vendas, que já a carrega).
   const previsaoDaVenda = venda
-    ? (vendasDisponiveis.find((v) => v.orcamentoNumero === venda.orcamentoNumero)
+    ? (vendasDisponiveis.find((v) => v.orcamentoId === venda.orcamentoId)
         ?.previsaoEntrega ?? null)
     : null
   const verItensOrdenados = ordenarPorL(verItens, (i) => itemDaVenda(i)?.classificacao)
@@ -884,7 +885,7 @@ export default function SeparacaoParcialPage() {
     try {
       await atualizarDadosEntregaParcial(verParcial.id, formEntrega)
       toast.success('Dados da entrega atualizados — a Logística já vê a mudança.')
-      const historico = await listarParciaisPorVenda(venda.orcamentoNumero)
+      const historico = await listarParciaisPorVenda(venda.orcamentoNumero, venda.orcamentoId)
       setParciais(historico)
       setVerParcial(historico.find((x) => x.id === verParcial.id) ?? null)
       setEditandoEntrega(false)
@@ -962,8 +963,8 @@ export default function SeparacaoParcialPage() {
       }
       toast.success('Peça(s) estornada(s). O saldo voltou para a reserva.')
       const [vendaAtualizada, historico] = await Promise.all([
-        buscarVendaPorNumero(venda.orcamentoNumero),
-        listarParciaisPorVenda(venda.orcamentoNumero),
+        buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId),
+        listarParciaisPorVenda(venda.orcamentoNumero, venda.orcamentoId),
       ])
       setVenda(vendaAtualizada)
       setParciais(historico)
@@ -990,8 +991,8 @@ export default function SeparacaoParcialPage() {
       await estornarSeparacaoParcial(estornoAlvo.id, estornoObservacao.trim())
       toast.success('Separação estornada. O saldo voltou para a reserva.')
       const [vendaAtualizada, historico] = await Promise.all([
-        buscarVendaPorNumero(venda.orcamentoNumero),
-        listarParciaisPorVenda(venda.orcamentoNumero),
+        buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId),
+        listarParciaisPorVenda(venda.orcamentoNumero, venda.orcamentoId),
       ])
       setVenda(vendaAtualizada)
       setParciais(historico)
@@ -1071,7 +1072,7 @@ export default function SeparacaoParcialPage() {
       toast.success(
         `${quantidade} unidade(s) transferida(s) de ${trocaOrigemEscolhida.projetoCodigo || semPrefixo(trocaOrigemEscolhida.orcamentoNumero) || 'outro projeto'} para esta venda.`,
       )
-      const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero)
+      const vendaAtualizada = await buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId)
       setVenda(vendaAtualizada)
       handleFecharTroca()
     } catch (err: any) {
@@ -1135,7 +1136,7 @@ export default function SeparacaoParcialPage() {
           ? `${quantidade} unidade(s) passada(s) de Reserva para Entrega Futura.`
           : `${quantidade} unidade(s) passada(s) de Entrega Futura para Reserva.`,
       )
-      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId))
       setAjusteItem(null)
     } catch (err: any) {
       toast.error('Erro ao ajustar', { description: err?.message })
@@ -1190,7 +1191,7 @@ export default function SeparacaoParcialPage() {
         return
       }
       toast.success(`Venda ligada ao projeto ${r.projeto ?? ligarProjeto.codigo}.`)
-      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId))
       setLigarAberto(false)
     } catch (err: any) {
       toast.error('Erro ao ligar o projeto', { description: err?.message })
@@ -1236,7 +1237,7 @@ export default function SeparacaoParcialPage() {
         observacao: tratObs.trim(),
       })
       toast.success('Tratamento registrado.')
-      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId))
       setTratItem(null)
     } catch (err: any) {
       toast.error('Erro ao tratar a herança', { description: err?.message })
@@ -1258,7 +1259,7 @@ export default function SeparacaoParcialPage() {
     try {
       await liberarVendasConnect(vendasLiberar, libMotivo.trim())
       toast.success('Itens liberados para separar.')
-      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero))
+      setVenda(await buscarVendaPorNumero(venda.orcamentoNumero, venda.orcamentoId))
       setLibAberto(false)
       setLibMotivo('')
     } catch (err: any) {
@@ -1428,8 +1429,8 @@ export default function SeparacaoParcialPage() {
                   <TableBody>
                     {vendasFiltradas.map((v) => (
                       <TableRow
-                        key={v.orcamentoNumero}
-                        onClick={() => !loading && handleLocalizar(v.orcamentoNumero)}
+                        key={v.orcamentoId ?? v.orcamentoNumero}
+                        onClick={() => !loading && handleLocalizar(v.orcamentoNumero, v.orcamentoId)}
                         className={`cursor-pointer hover:bg-primary/5 ${loading ? 'pointer-events-none opacity-50' : ''} ${v.vendaAntiga ? 'bg-amber-50 hover:bg-amber-100' : ''} ${v.finalizada ? 'bg-muted/40 text-muted-foreground opacity-60 hover:opacity-100' : ''}`}
                       >
                         {/* SPEC-138 (Prompt 4): referências de orçamento/venda em

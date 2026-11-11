@@ -288,7 +288,12 @@ export async function buscarBoletosPorOrcamento(orcamentoId: string): Promise<Bo
 // identificador que existia até aqui) quanto o número da venda propriamente
 // dito (VENDA-XXXX, novo) — orçamentos aprovados antes desta SPEC não têm
 // venda_numero (sem backfill), por isso o fallback continua necessário.
-export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaInfo | null> {
+// SPEC-280: o número do orçamento NÃO é único (cada equipe tem a sua sequência: há 3 "ORC-0005"). Quem já sabe qual venda
+// é passa o orcamentoId; só a busca por número digitado cai no comportamento antigo.
+export async function buscarVendaPorNumero(
+  numeroVenda: string,
+  orcamentoId?: string | null,
+): Promise<VendaInfo | null> {
   const numero = numeroVenda.trim()
   if (!numero) return null
 
@@ -303,12 +308,14 @@ export async function buscarVendaPorNumero(numeroVenda: string): Promise<VendaIn
       .from('vw_estoque_saldos_projeto_item')
       .select(camposSelecionados)
       .eq('orcamento_numero', numero)
-      .eq('status_operacional', 'ativo'),
+      .eq('status_operacional', 'ativo')
+      .match(orcamentoId ? { orcamento_id: orcamentoId } : {}),
     supabase
       .from('vw_estoque_saldos_projeto_item')
       .select(camposSelecionados)
       .eq('venda_numero', numero)
-      .eq('status_operacional', 'ativo'),
+      .eq('status_operacional', 'ativo')
+      .match(orcamentoId ? { orcamento_id: orcamentoId } : {}),
   ])
 
   if (porOrcamento.error) throw porOrcamento.error
@@ -701,21 +708,38 @@ export async function estornarItemSeparacao(
   if (error) throw error
 }
 
-export async function listarParciaisPorVenda(numeroVenda: string): Promise<ParcialHistorico[]> {
+export async function listarParciaisPorVenda(
+  numeroVenda: string,
+  orcamentoId?: string | null,
+): Promise<ParcialHistorico[]> {
   const numero = numeroVenda.trim()
   if (!numero) return []
+
+  // SPEC-280: `separacoes.numero_venda` guarda o número do orçamento, que se repete entre equipes. Com o orcamentoId,
+  // só entram as parciais cujos itens são desta venda (separacao_itens → projeto_itens.orcamento_id).
+  let idsDaVenda: string[] | null = null
+  if (orcamentoId) {
+    const { data: donos, error: donosError } = await supabase
+      .from('separacao_itens')
+      .select('separacao_id, projeto_item:projeto_itens!inner(orcamento_id)')
+      .eq('projeto_item.orcamento_id', orcamentoId)
+    if (donosError) throw donosError
+    idsDaVenda = [...new Set((donos || []).map((d: any) => d.separacao_id as string))]
+    if (idsDaVenda.length === 0) return []
+  }
 
   // SPEC-090 adicionou alterado_por (também FK pra usuarios) em `separacoes`
   // — com 2 FKs pra usuarios, o embed implícito "usuarios(nome)" fica
   // ambíguo pro PostgREST; precisa apontar explicitamente pra
   // responsavel_id.
-  const { data, error } = await supabase
+  let consulta = supabase
     .from('separacoes')
     .select(
       'id, created_at, status, data_entrega, endereco, endereco_entrega, responsavel_recebimento, telefone, observacoes_internas, responsavel:usuarios!responsavel_id(nome), itens:separacao_itens(id), entrega:entregas_finalizadas(recebido_por, entregue_por, data_entrega_real, observacoes)',
     )
     .eq('numero_venda', numero)
-    .order('created_at', { ascending: false })
+  if (idsDaVenda) consulta = consulta.in('id', idsDaVenda)
+  const { data, error } = await consulta.order('created_at', { ascending: false })
 
   if (error) throw error
 
@@ -1017,15 +1041,31 @@ export async function getReservasOutrosProjetos(
   const orcIds = [...new Set((data || []).map((r: any) => r.orcamento_id).filter(Boolean))] as string[]
   const orcMap = new Map<string, { vendaNumero: string | null; origem: OrigemVenda; equipe: string | null }>()
   if (orcIds.length > 0) {
-    const { data: orcs } = await (supabase.from as any)('orcamentos')
-      .select('id, numero_venda, origem, equipe:equipes_projetos(equipes)')
-      .in('id', orcIds)
-    for (const o of orcs || []) {
-      orcMap.set(o.id, {
-        vendaNumero: o.numero_venda != null ? String(o.numero_venda) : null,
-        origem: o.origem === 'connect' ? 'connect' : 'sistema',
-        equipe: o.equipe?.equipes ?? null,
-      })
+    // SPEC-280: a regra de equipe esconde os orçamentos de outras equipes, mas puxar peça de qualquer equipe é permitido;
+    // a função reserva_dados_vendas devolve só número da venda, origem e equipe (sem cliente nem valores) para identificar de onde
+    // se puxa. Se a função ainda não existir no banco, cai na leitura direta de orçamentos (só enxerga a própria equipe).
+    const { data: viaFuncao, error: erroFuncao } = await (supabase as any).rpc('reserva_dados_vendas', {
+      p_orcamento_ids: orcIds,
+    })
+    if (!erroFuncao) {
+      for (const o of (viaFuncao || []) as any[]) {
+        orcMap.set(o.orcamento_id, {
+          vendaNumero: o.numero_venda != null ? String(o.numero_venda) : null,
+          origem: o.origem === 'connect' ? 'connect' : 'sistema',
+          equipe: o.equipe_nome ?? null,
+        })
+      }
+    } else {
+      const { data: orcs } = await (supabase.from as any)('orcamentos')
+        .select('id, numero_venda, origem, equipe:equipes_projetos(equipes)')
+        .in('id', orcIds)
+      for (const o of orcs || []) {
+        orcMap.set(o.id, {
+          vendaNumero: o.numero_venda != null ? String(o.numero_venda) : null,
+          origem: o.origem === 'connect' ? 'connect' : 'sistema',
+          equipe: o.equipe?.equipes ?? null,
+        })
+      }
     }
   }
 
